@@ -1,11 +1,14 @@
 # MiBackup_sly - 小米云备份助手
 
-[![Android](https://img.shields.io/badge/Android-9.0+-blue)](https://www.android.com)
-[![LSPosed](https://img.shields.io/badge/LSPosed-supported-green)](https://modules.lsposed.org)
-[![XposedModule](https://img.shields.io/badge/XposedModule-green)](https://github.com/Xposed-Modules-Repo)
-[![Upstream](https://img.shields.io/badge/Upstream-XPoser__MiBackup-blue)](https://github.com/zgcwkjOpenProject/XPoser_MiBackup)
+![Android](https://img.shields.io/badge/Android-9.0+-blue)
 
-本项目是 [XPoser_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）与光鸭云盘内置 Provider、OAuth2 Token 自动刷新等能力。
+![LSPosed](https://img.shields.io/badge/LSPosed-supported-green)
+
+![XposedModule](https://img.shields.io/badge/XposedModule-green)
+
+![Upstream](https://img.shields.io/badge/Upstream-XPoser__MiBackup-blue)
+
+本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）与光鸭云盘内置 Provider、OAuth2 Token 自动刷新等能力。
 
 通过 Xposed 模块虚拟小米智能存储设备，将小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘，实现备份与恢复数据的云端存储。
 
@@ -38,7 +41,7 @@
 
 ## 环境要求
 
-- Android 9.0+（minSdk 28）
+- zndroid 9.0+（minSdk 28）
 - 已安装 Xposed 框架（LSPatch / LSPosed / EdXposed 等）
 - 支持的 Xposed 作用域：`com.android.settings`、`com.miui.backup`
 
@@ -78,10 +81,10 @@
 
 模块注入两个不同 UID 的进程，进程间通过 sdcard 上的 JSON 文件通信：
 
-| 进程 | 职责 | 注入的 Hook |
-|------|------|-------------|
-| `com.android.settings` | 展示配置 UI、管理账号 / 方案、发起登录 | SettingsHook |
-| `com.miui.backup` | 拦截 DFS AIDL、执行备份 / 恢复文件传输 | AIDLHook、BackupHook、AutoBackupHook |
+| 进程                     | 职责                        | 注入的 Hook                           |
+| ---------------------- | ------------------------- | ---------------------------------- |
+| `com.android.settings` | 展示配置 UI、管理账号 / 方案、发起登录    | SettingsHook                       |
+| `com.miui.backup`      | 拦截 DFS AIDL、执行备份 / 恢复文件传输 | AIDLHook、BackupHook、AutoBackupHook |
 
 由于 Android Keystore 密钥按进程 UID 隔离无法跨进程共享，凭据加密存储（见下文）采用「固定种子 + 随机文件盐 + PBKDF2 派生」方案，使两个进程读同一文件得到同一密钥。
 
@@ -109,25 +112,25 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 
 所有敏感凭据（密码、Token、Cookie、脚本正文）经 `EncryptedCredStore` 加密后落盘到 `/sdcard/MIUI/backup/creds.json`，明文不出现在 sdcard 上。
 
-| 维度 | 方案 |
-|------|------|
-| 算法 | AES-256-GCM（带 128-bit 认证标签），IV 随机且随密文存储 |
-| 密钥派生 | PBKDF2-HmacSHA256（20000 迭代），固定种子 + 随机文件盐 |
+| 维度     | 方案                                        |
+| ------ | ----------------------------------------- |
+| 算法     | AES-256-GCM（带 128-bit 认证标签），IV 随机且随密文存储   |
+| 密钥派生   | PBKDF2-HmacSHA256（20000 迭代），固定种子 + 随机文件盐  |
 | 跨进程一致性 | 文件盐随文件持久化，settings 与 backup 进程读同一文件得到同一密钥 |
-| 隔离 | 按 accountId / profileId 命名空间隔离，账号间互不可见 |
-| 原子写入 | 临时文件 + rename 原子替换 + 文件锁，防截断与并发覆盖 |
-| 兼容 | 旧版无盐格式自动兼容读取，任意写操作触发升级重加密 |
-| 缓存 | 进程内解密缓存（TTL 10 分钟），文件修改时间 + 大小变化自动失效 |
+| 隔离     | 按 accountId / profileId 命名空间隔离，账号间互不可见    |
+| 原子写入   | 临时文件 + rename 原子替换 + 文件锁，防截断与并发覆盖         |
+| 兼容     | 旧版无盐格式自动兼容读取，任意写操作触发升级重加密                 |
+| 缓存     | 进程内解密缓存（TTL 10 分钟），文件修改时间 + 大小变化自动失效      |
 
 ### 各通道凭据与刷新策略
 
-| 通道 | 凭据类型 | 获取方式 | 静默刷新 | 过期处理 |
-|------|---------|---------|---------|---------|
-| SMB | 账号密码 | 设置页录入 | 无需 | 重新录入 |
-| WebDAV | 账号密码 | 设置页录入 | 无需 | 重新录入 |
-| 自定义脚本 | 脚本内自管理 | 设置页粘贴 JS | 脚本 `stateGet/stateSet` 持久化 | 脚本自行处理 |
-| 139 云盘 | Authorization（Basic） | WebView 网页登录捕获 | 不支持（Cookie 型） | 引导重新登录 |
-| 光鸭云盘 | access_token + refresh_token | WebView 网页登录捕获 | OAuth2 refresh_token 自动轮换 | refresh_token 失效则引导重登 |
+| 通道     | 凭据类型                         | 获取方式           | 静默刷新                       | 过期处理                  |
+| ------ | ---------------------------- | -------------- | -------------------------- | --------------------- |
+| SMB    | 账号密码                         | 设置页录入          | 无需                         | 重新录入                  |
+| WebDAV | 账号密码                         | 设置页录入          | 无需                         | 重新录入                  |
+| 自定义脚本  | 脚本内自管理                       | 设置页粘贴 JS       | 脚本 `stateGet/stateSet` 持久化 | 脚本自行处理                |
+| 139 云盘 | Authorization（Basic）         | WebView 网页登录捕获 | 不支持（Cookie 型）              | 引导重新登录                |
+| 光鸭云盘   | access_token + refresh_token | WebView 网页登录捕获 | OAuth2 refresh_token 自动轮换  | refresh_token 失效则引导重登 |
 
 ### 光鸭云盘 OAuth2 刷新
 
@@ -165,24 +168,24 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 
 ### 配置文件
 
-| 文件 | 说明 | 敏感性 |
-|------|------|--------|
-| `/sdcard/MIUI/backup/config.ini` | 全局非敏感配置（路径、线程数、切片大小、设备名等） | 非敏感 |
-| `/sdcard/MIUI/backup/profiles.json` | NAS 方案列表 + activeId | 非敏感元数据 |
-| `/sdcard/MIUI/backup/cloud_accounts.json` | 云盘账号列表 | 非敏感元数据 |
-| `/sdcard/MIUI/backup/backup_target.json` | 当前备份目标（cloud / profile + id） | 非敏感 |
-| `/sdcard/MIUI/backup/creds.json` | 加密凭据（密码 / Token / Cookie / 脚本） | **加密** |
+| 文件                                        | 说明                             | 敏感性    |
+| ----------------------------------------- | ------------------------------ | ------ |
+| `/sdcard/MIUI/backup/config.ini`          | 全局非敏感配置（路径、线程数、切片大小、设备名等）      | 非敏感    |
+| `/sdcard/MIUI/backup/profiles.json`       | NAS 方案列表 + activeId            | 非敏感元数据 |
+| `/sdcard/MIUI/backup/cloud_accounts.json` | 云盘账号列表                         | 非敏感元数据 |
+| `/sdcard/MIUI/backup/backup_target.json`  | 当前备份目标（cloud / profile + id）   | 非敏感    |
+| `/sdcard/MIUI/backup/creds.json`          | 加密凭据（密码 / Token / Cookie / 脚本） | **加密** |
 
 ### 全局配置项
 
-| 配置项 | 说明 | 默认值 |
-| --- | --- | --- |
-| `backup_path` | 云端备份根目录 | `MIUI/backup` |
-| `upload_threads` | 并发上传线程数 | `3` |
-| `chunk_size_mb` | 上传切片大小（MB）；`0` 表示不切片 | `64` |
-| `backup_max` | 最大保留备份数；`0` 表示不自动清理 | `5` |
-| `device_name` | 设置页展示的虚拟设备名称 | - |
-| `device_describe` | 设置页展示的虚拟设备描述 | - |
+| 配置项               | 说明                   | 默认值           |
+| ----------------- | -------------------- | ------------- |
+| `backup_path`     | 云端备份根目录              | `MIUI/backup` |
+| `upload_threads`  | 并发上传线程数              | `3`           |
+| `chunk_size_mb`   | 上传切片大小（MB）；`0` 表示不切片 | `64`          |
+| `backup_max`      | 最大保留备份数；`0` 表示不自动清理  | `5`           |
+| `device_name`     | 设置页展示的虚拟设备名称         | -             |
+| `device_describe` | 设置页展示的虚拟设备描述         | -             |
 
 ### NAS 方案配置（profiles.json）
 
@@ -190,22 +193,22 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 
 **SMB 方案参数**
 
-| 参数 | 说明 |
-| --- | --- |
-| `smb_server` / `smb_port` / `smb_share` / `smb_user` | 连接参数（非敏感） |
-| `smb_pass` | 密码（存 EncryptedCredStore） |
+| 参数                                                   | 说明                       |
+| ---------------------------------------------------- | ------------------------ |
+| `smb_server` / `smb_port` / `smb_share` / `smb_user` | 连接参数（非敏感）                |
+| `smb_pass`                                           | 密码（存 EncryptedCredStore） |
 
 **WebDAV 方案参数**
 
-| 参数 | 说明 |
-| --- | --- |
-| `webdav_url` / `webdav_user` | 连接参数（非敏感） |
-| `webdav_pass` | 密码（存 EncryptedCredStore） |
+| 参数                           | 说明                       |
+| ---------------------------- | ------------------------ |
+| `webdav_url` / `webdav_user` | 连接参数（非敏感）                |
+| `webdav_pass`                | 密码（存 EncryptedCredStore） |
 
 **自定义脚本方案参数**
 
-| 参数 | 说明 |
-| --- | --- |
+| 参数                  | 说明                                     |
+| ------------------- | -------------------------------------- |
 | `custom_script_b64` | Base64 编码的 JS 脚本（存 EncryptedCredStore） |
 
 自定义脚本的写法、接口说明和示例见 [自定义 HTTP 脚本文档](plugins/README.md)。
@@ -214,12 +217,12 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 
 云盘账号通过设置页「账号」Tab 添加，选择网盘类型后经 WebView 登录捕获凭据：
 
-| 字段 | 说明 |
-| --- | --- |
-| `id` | 账号唯一标识 |
+| 字段         | 说明                     |
+| ---------- | ---------------------- |
+| `id`       | 账号唯一标识                 |
 | `provider` | 网盘类型：`139` 或 `guangya` |
-| `account` | 登录账号（139 为手机号） |
-| `name` | 显示名称 |
+| `account`  | 登录账号（139 为手机号）         |
+| `name`     | 显示名称                   |
 
 登录捕获的 `Authorization` / `access_token` / `refresh_token` / `host` 等敏感凭据存入 EncryptedCredStore，按账号 id 隔离。
 
@@ -275,15 +278,15 @@ app/src/main/java/com/suileyan/
 
 ### 实现说明
 
-| 模块 | 作用 |
-| --- | --- |
-| `SettingsHook` | 在设置 App 中注入配置入口，展示虚拟智能存储设备 |
-| `AIDLHook` | 模拟 DFS 服务连接，拦截上传、下载、目录查询，分发到 CloudFileHelp |
-| `CloudFileHelp` | 统一分发五种通道，处理跨协议切片与 AUTH_EXPIRED 重试 |
-| `BackupHook` | 修正备份 App 页面、通知、进度焦点和取消清理 |
-| `AutoBackupHook` | 接入备份 App 原生自动备份设置和调度链路 |
-| `ProviderRegistry` | 按备份目标（云盘账号优先，其次激活方案）取 Provider 实例 |
-| `EncryptedCredStore` | AES-GCM 加密凭据，按账号隔离，跨进程共享 |
+| 模块                   | 作用                                         |
+| -------------------- | ------------------------------------------ |
+| `SettingsHook`       | 在设置 App 中注入配置入口，展示虚拟智能存储设备                 |
+| `AIDLHook`           | 模拟 DFS 服务连接，拦截上传、下载、目录查询，分发到 CloudFileHelp |
+| `CloudFileHelp`      | 统一分发五种通道，处理跨协议切片与 AUTH_EXPIRED 重试          |
+| `BackupHook`         | 修正备份 App 页面、通知、进度焦点和取消清理                   |
+| `AutoBackupHook`     | 接入备份 App 原生自动备份设置和调度链路                     |
+| `ProviderRegistry`   | 按备份目标（云盘账号优先，其次激活方案）取 Provider 实例          |
+| `EncryptedCredStore` | AES-GCM 加密凭据，按账号隔离，跨进程共享                   |
 
 ## 编译
 
@@ -300,12 +303,12 @@ gradlew assembleDebug
 
 ## 依赖
 
-| 库 | 用途 |
-|---|---|
-| [Xposed API](https://api.xposed.info/) | 框架 Hook 能力 |
-| [smbj](https://github.com/hierynomus/smbj) | SMB/CIFS 协议 |
+| 库                                          | 用途                          |
+| ------------------------------------------ | --------------------------- |
+| [Xposed API](https://api.xposed.info/)     | 框架 Hook 能力                  |
+| [smbj](https://github.com/hierynomus/smbj) | SMB/CIFS 协议                 |
 | [OkHttp](https://square.github.io/okhttp/) | HTTP 客户端（WebDAV / 139 / 光鸭） |
-| [Rhino](https://github.com/mozilla/rhino) | 自定义 HTTP 脚本 JS 运行时 |
+| [Rhino](https://github.com/mozilla/rhino)  | 自定义 HTTP 脚本 JS 运行时          |
 
 ## 安全说明
 
