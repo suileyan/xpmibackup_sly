@@ -100,6 +100,9 @@
     <string name="title_webview_login_guangya">Log in to Guangya Cloud Drive</string>
     <string name="cloud_provider_quark">Quark Drive</string>
     <string name="cloud_provider_quark_hint">In-app web login</string>
+    <string name="cloud_provider_123">123 Cloud Drive</string>
+    <string name="cloud_provider_123_hint">In-app web login</string>
+    <string name="title_webview_login_123">Log in to 123 Cloud Drive</string>
     <string name="title_webview_login_quark">Log in to Quark Drive</string>
     <string name="webview_login_done">Done</string>
     <string name="webview_login_tip">Log in on the page, then tap "Done" in the top-right corner.</string>

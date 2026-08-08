@@ -1,6 +1,7 @@
 package com.suileyan.cloud;
 
 import com.suileyan.cloud.provider.GuangyaProvider;
+import com.suileyan.cloud.provider.Pan123Provider;
 import com.suileyan.cloud.provider.QuarkProvider;
 import com.suileyan.cloud.provider.ScriptProvider;
 import com.suileyan.cloud.provider.SmbProvider;
@@ -58,6 +59,9 @@ public final class ProviderRegistry {
             }
             if (account != null && CloudAccount.PROVIDER_QUARK.equals(account.provider)) {
                 return QuarkProvider.TYPE;
+            }
+            if (account != null && CloudAccount.PROVIDER_123.equals(account.provider)) {
+                return Pan123Provider.TYPE;
             }
             // 未知/已删除账号：返回空串，由调用方回退
             return "";
@@ -139,6 +143,9 @@ public final class ProviderRegistry {
         }
         if (CloudAccount.PROVIDER_QUARK.equals(account.provider)) {
             return new QuarkProvider(account);
+        }
+        if (CloudAccount.PROVIDER_123.equals(account.provider)) {
+            return new Pan123Provider(account);
         }
         LogHelp.e(TAG, "unsupported cloud provider: " + account.provider);
         return null;

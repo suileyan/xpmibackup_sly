@@ -140,6 +140,9 @@
     <string name="cloud_provider_guangya_hint">应用内网页登录</string>
     <string name="cloud_provider_quark">夸克云盘</string>
     <string name="cloud_provider_quark_hint">应用内网页登录</string>
+    <string name="cloud_provider_123">123云盘</string>
+    <string name="cloud_provider_123_hint">应用内网页登录</string>
+    <string name="title_webview_login_123">登录 123 云盘</string>
     <string name="title_webview_login_quark">登录夸克云盘</string>
     <string name="title_webview_login">登录 139 云盘</string>
     <string name="title_webview_login_guangya">登录光鸭云盘</string>

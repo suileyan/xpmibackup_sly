@@ -44,6 +44,7 @@ public class WebViewLoginFragment extends Fragment {
     public static final String PROVIDER_139 = "139";
     public static final String PROVIDER_GUANGYA = "guangya";
     public static final String PROVIDER_QUARK = "quark";
+    public static final String PROVIDER_123 = "123";
     public static final String ARG_PROVIDER = "provider";
 
     /** 139 云盘登录页 */
@@ -52,6 +53,8 @@ public class WebViewLoginFragment extends Fragment {
     private static final String URL_GUANGYA = "https://www.guangyapan.com/";
     /** 夸克云盘登录页 */
     private static final String URL_QUARK = "https://pan.quark.cn/";
+    /** 123云盘登录页 */
+    private static final String URL_123 = "https://www.123pan.com/";
 
     /** 桌面版 User-Agent（电脑模式） */
     private static final String DESKTOP_UA =
@@ -107,6 +110,21 @@ public class WebViewLoginFragment extends Fragment {
             + "if(!rt&&k.toLowerCase().indexOf('refresh')>=0)rt=v;}}}}catch(e){}}"
             + "scan(window.localStorage);return at+'|||'+rt;})()";
 
+    /**
+     * 123云盘 localStorage/sessionStorage 提取脚本：返回最长的 token 候选
+     * 覆盖三种形态：值以 "Bearer xxx" 开头、JSON 内 token/auth 字段、JWT 形（含两个点）
+     */
+    private static final String EXTRACT_JS_123 =
+            "(function(){var best='';"
+            + "function walk(o){if(!o)return;if(typeof o==='string'){if(o.length>best.length)best=o;return;}"
+            + "if(typeof o==='object'){for(var k in o){if(/token|auth/i.test(k)&&typeof o[k]==='string'&&o[k].length>best.length)best=o[k];walk(o[k]);}}}"
+            + "function pick(v){if(!v)return;v=String(v).trim();if(v.length<20)return;"
+            + "var m=v.match(/^Bearer\\s+(\\S+)$/);if(m)v=m[1];"
+            + "if(v.split('.').length>=3){if(v.length>best.length)best=v;return;}"
+            + "try{walk(JSON.parse(v));}catch(e){}}"
+            + "function scan(s){try{for(var i=0;i<s.length;i++){var v=s.getItem(s.key(i));pick(v);}}catch(e){}}"
+            + "scan(window.localStorage);scan(window.sessionStorage);return best;})()";
+
     private WebView webView;
     private Button btnDone;
     private String provider = PROVIDER_139;
@@ -119,6 +137,9 @@ public class WebViewLoginFragment extends Fragment {
     private volatile String capturedBearer = "";
     private volatile String capturedRefresh = "";
     private volatile boolean bearerFromRequest = false;
+    // ---- 123 云盘捕获状态 ----
+    private volatile String captured123Bearer = "";
+    private volatile boolean bearer123FromRequest = false;
 
     /**
      * 初始化界面：按网盘类型配置 WebView 并加载登录页
@@ -142,6 +163,8 @@ public class WebViewLoginFragment extends Fragment {
                 tvTitle.setText(R.string.title_webview_login_guangya);
             } else if (PROVIDER_QUARK.equals(provider)) {
                 tvTitle.setText(R.string.title_webview_login_quark);
+            } else if (PROVIDER_123.equals(provider)) {
+                tvTitle.setText(R.string.title_webview_login_123);
             } else {
                 tvTitle.setText(R.string.title_webview_login);
             }
@@ -200,6 +223,15 @@ public class WebViewLoginFragment extends Fragment {
                     // 夸克登录页同为 SPA，同样预注入桌面模式
                     if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
                             && isQuarkHost(request.getUrl().getHost())
+                            && isHtmlPage(request.getUrl().toString())) {
+                        var injected = fetchAndInjectDesktop(request.getUrl().toString());
+                        if (injected != null) return injected;
+                    }
+                } else if (PROVIDER_123.equals(provider)) {
+                    intercept123(request);
+                    // 123云盘登录页同为 SPA，同样预注入桌面模式
+                    if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
+                            && isPan123Host(request.getUrl().getHost())
                             && isHtmlPage(request.getUrl().toString())) {
                         var injected = fetchAndInjectDesktop(request.getUrl().toString());
                         if (injected != null) return injected;
@@ -272,6 +304,17 @@ public class WebViewLoginFragment extends Fragment {
                     }
                     LogHelp.d(TAG, "夸克登录页 Cookie 就绪: len=" + (ck != null ? ck.length() : 0)
                             + " keys=" + String.join(",", names));
+                } else if (PROVIDER_123.equals(provider)) {
+                    // 123云盘：localStorage/sessionStorage 兜底扫描（主通道是请求头拦截）
+                    view.evaluateJavascript(EXTRACT_JS_123, value -> {
+                        if (value != null && !"null".equals(value)) {
+                            var cleaned = value.replace("\"", "").trim();
+                            if (cleaned.length() > 20 && cleaned.length() > captured123Bearer.length()) {
+                                captured123Bearer = cleaned;
+                                LogHelp.i(TAG, "123云盘 localStorage 提取到 token, len=" + cleaned.length());
+                            }
+                        }
+                    });
                 } else {
                     view.evaluateJavascript(EXTRACT_JS_139, value -> {
                         if (value != null && value.toLowerCase().contains("basic")) {
@@ -290,7 +333,8 @@ public class WebViewLoginFragment extends Fragment {
         });
 
         webView.loadUrl(PROVIDER_GUANGYA.equals(provider) ? URL_GUANGYA
-                : PROVIDER_QUARK.equals(provider) ? URL_QUARK : URL_139);
+                : PROVIDER_QUARK.equals(provider) ? URL_QUARK
+                : PROVIDER_123.equals(provider) ? URL_123 : URL_139);
 
         // 返回键：优先让 WebView 后退
         view.setFocusableInTouchMode(true);
@@ -365,6 +409,66 @@ public class WebViewLoginFragment extends Fragment {
         if (host == null) return false;
         var h = host.toLowerCase(java.util.Locale.ROOT);
         return h.equals("pan.quark.cn") || h.equals("drive.quark.cn") || h.equals("drive-pc.quark.cn");
+    }
+
+    /** 严格判断主机名是否属于 123pan.com（防相似域名绕过，HIGH-18） */
+    private static boolean isPan123Host(String host) {
+        if (host == null) return false;
+        var h = host.toLowerCase(java.util.Locale.ROOT);
+        return h.equals("123pan.com") || h.endsWith(".123pan.com");
+    }
+
+    /**
+     * 123云盘：捕获登录后 SPA API 请求的 Authorization: Bearer <token>
+     * 容错设计：遍历全部请求头（不假设 key 大小写），识别值以 "Bearer " 开头或 JWT 形（含两个点、长度>20）的
+     * token/auth 类头；Cookie 兜底（token 若出现在 cookie 里）。登录后前端必然发 API 请求，拦截即得。
+     */
+    private void intercept123(WebResourceRequest request) {
+        var host = request.getUrl().getHost();
+        if (host == null || !isPan123Host(host)) return;
+        var headers = request.getRequestHeaders();
+        if (headers == null) return;
+        for (var entry : headers.entrySet()) {
+            var name = entry.getKey() == null ? "" : entry.getKey().toLowerCase(java.util.Locale.ROOT);
+            var value = entry.getValue() == null ? "" : entry.getValue().trim();
+            if (value.isEmpty()) continue;
+            if (name.equals("authorization") || name.contains("token") || name.contains("auth")) {
+                var token = pickBearer(value);
+                if (!token.isEmpty() && token.length() > captured123Bearer.length()) {
+                    captured123Bearer = token;
+                    bearer123FromRequest = true;
+                    LogHelp.i(TAG, "captured 123 token from request header " + entry.getKey()
+                            + " len=" + token.length());
+                }
+            } else if (name.equals("cookie")) {
+                for (var pair : value.split(";")) {
+                    var p = pair.trim();
+                    var idx = p.indexOf('=');
+                    if (idx <= 0) continue;
+                    var ck = p.substring(0, idx).trim().toLowerCase(java.util.Locale.ROOT);
+                    var cv = p.substring(idx + 1).trim();
+                    if ((ck.contains("token") || ck.contains("auth")) && cv.length() > 20
+                            && cv.length() > captured123Bearer.length()) {
+                        captured123Bearer = cv;
+                        bearer123FromRequest = true;
+                        LogHelp.i(TAG, "captured 123 token from cookie " + ck + " len=" + cv.length());
+                    }
+                }
+            }
+        }
+    }
+
+    /** 从 header 值提取 token：优先 "Bearer xxx"，其次 JWT 形（含两个点、长度>20） */
+    private static String pickBearer(String value) {
+        var v = value.trim();
+        var lower = v.toLowerCase(java.util.Locale.ROOT);
+        if (lower.startsWith("bearer ")) {
+            return v.substring(7).trim();
+        }
+        if (v.length() > 20 && v.indexOf('.') > 0 && v.indexOf('.', v.indexOf('.') + 1) > 0) {
+            return v;
+        }
+        return "";
     }
 
     /** 注入桌面模式脚本（覆写 navigator.userAgent/UserAgentData + 强制桌面 viewport） */
@@ -442,6 +546,8 @@ public class WebViewLoginFragment extends Fragment {
             onDoneGuangya();
         } else if (PROVIDER_QUARK.equals(provider)) {
             onDoneQuark();
+        } else if (PROVIDER_123.equals(provider)) {
+            onDone123();
         } else {
             onDone139();
         }
@@ -543,6 +649,100 @@ public class WebViewLoginFragment extends Fragment {
             finishSave();
         } catch (Exception e) {
             LogHelp.e(TAG, "save 夸克 account failed", e);
+            Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * 123云盘「完成」：token 为空时现场重扫一次 localStorage（防"登录后才出现 API 请求"时序），
+     * 仍为空则提示；否则后台验证通过后保存。幂等复用已存在 123 账号 id。
+     */
+    private void onDone123() {
+        var token = captured123Bearer;
+        if (token.isEmpty()) {
+            webView.evaluateJavascript(EXTRACT_JS_123, value -> {
+                if (value != null && !"null".equals(value)) {
+                    var cleaned = value.replace("\"", "").trim();
+                    if (cleaned.length() > 20) {
+                        captured123Bearer = cleaned;
+                        bearer123FromRequest = true;
+                        doSave123();
+                    } else {
+                        Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+                    }
+                } else {
+                    Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+                }
+            });
+            return;
+        }
+        doSave123();
+    }
+
+    /** 123云盘：验证并保存捕获的 token */
+    private void doSave123() {
+        var token = captured123Bearer;
+        if (token.isEmpty()) {
+            Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+            return;
+        }
+        // 仅 localStorage 兜底捕获且长度可疑（非 JWT 形）时拒绝
+        if (!bearer123FromRequest && token.length() <= 20) {
+            Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+            return;
+        }
+        btnDone.setEnabled(false);
+        btnDone.setText(R.string.testing_connection);
+        var id = "123_" + System.currentTimeMillis();
+        // 幂等：复用已存在 123 账号 id，避免重复保存出现多个账号
+        var existing = CloudAccountStore.list().stream()
+                .filter(a -> CloudAccount.PROVIDER_123.equals(a.provider))
+                .findFirst().orElse(null);
+        if (existing != null) id = existing.id;
+        var accountId = id;
+        // 归一化：与参考 self.authorization='Bearer '+token 一致
+        var authValue = token.toLowerCase(java.util.Locale.ROOT).startsWith("bearer ") ? token : "Bearer " + token;
+        new Thread(() -> {
+            try {
+                // 临时保存用于验证，成功后保留；失败则回滚
+                EncryptedCredStore.put(accountId, "authorization", authValue);
+                var provider = com.suileyan.cloud.ProviderRegistry.forAccount(
+                        new CloudAccount(accountId, CloudAccount.PROVIDER_123, "", "", System.currentTimeMillis()));
+                var ok = provider != null && provider.testConnection();
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(() -> {
+                    btnDone.setEnabled(true);
+                    btnDone.setText(R.string.webview_login_done);
+                    if (ok) {
+                        saveAccount123(accountId, token);
+                    } else {
+                        EncryptedCredStore.removeAccount(accountId);
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                LogHelp.e(TAG, "123云盘验证失败", e);
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        btnDone.setEnabled(true);
+                        btnDone.setText(R.string.webview_login_done);
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    });
+                }
+            }
+        }, "XpMiBackup-123-validate").start();
+    }
+
+    /** 保存 123 账号（token 已在后台验证通过）；uid 从 JWT payload 解码回填 */
+    private void saveAccount123(String id, String token) {
+        try {
+            var uid = com.suileyan.cloud.AccountDisplay.decodeUid(token);
+            CloudAccountStore.add(new CloudAccount(id, CloudAccount.PROVIDER_123, uid,
+                    getString(R.string.cloud_provider_123), System.currentTimeMillis()));
+            LogHelp.i(TAG, "123云盘账号已保存: " + id + " uid=" + uid + " token_len=" + token.length());
+            finishSave();
+        } catch (Exception e) {
+            LogHelp.e(TAG, "save 123 account failed", e);
             Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
         }
     }
