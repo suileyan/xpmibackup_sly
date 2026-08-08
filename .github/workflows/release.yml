@@ -77,10 +77,37 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease
 
+      # APK 文件名与软件名（应用名 miback_sly）一致，并携带版本号：
+      # 有签名 → miback_sly-<versionName>.apk；未签名 → miback_sly-<versionName>-unsigned.apk
+      - name: Compute APK base name
+        id: apkname
+        run: |
+          VERSION="$(grep -E 'versionName' src/app/build.gradle | head -1 | sed -E 's/.*versionName[[:space:]]+"([^"]+)".*/\1/')"
+          if [ -z "$VERSION" ]; then
+            echo "::error::Failed to read versionName from build.gradle"
+            exit 1
+          fi
+          echo "base=miback_sly-${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "::notice::APK base name: miback_sly-${VERSION}"
+
+      - name: Rename release APK to match app name
+        run: |
+          cd src/app/build/outputs/apk/release
+          if [ -f "app-release.apk" ]; then
+            mv "app-release.apk" "${{ steps.apkname.outputs.base }}.apk"
+          elif [ -f "app-release-unsigned.apk" ]; then
+            mv "app-release-unsigned.apk" "${{ steps.apkname.outputs.base }}-unsigned.apk"
+          else
+            echo "::error::No release APK found to rename"
+            ls -la
+            exit 1
+          fi
+          ls -la
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: app-release-apk
+          name: miback-sly-apk
           path: src/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
