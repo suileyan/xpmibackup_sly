@@ -2,144 +2,157 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/background">
+    android:background="@color/background"
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:padding="16dp">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/title_device_config"
-            android:textSize="22sp"
+            android:textSize="20sp"
             android:textStyle="bold"
             android:textColor="@color/text_primary"
-            android:layout_marginBottom="24dp" />
+            android:layout_marginStart="8dp"
+            android:layout_marginBottom="16dp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/device_name"
-            android:textSize="14sp"
-            android:textColor="@color/text_secondary"
-            android:layout_marginBottom="4dp" />
-
-        <EditText
-            android:id="@+id/et_device_name"
+        <!-- 设备信息卡片 -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="@string/device_name_hint"
-            android:inputType="text"
-            android:textColor="@color/text_primary"
-            android:background="@color/surface"
-            android:textColorHint="@color/text_hint"
-            android:padding="12dp"
-            android:layout_marginBottom="20dp" />
+            android:orientation="vertical"
+            android:background="@drawable/bg_card"
+            android:padding="16dp"
+            android:layout_marginBottom="16dp">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/device_description"
-            android:textSize="14sp"
-            android:textColor="@color/text_secondary"
-            android:layout_marginBottom="4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/device_name"
+                android:textSize="13sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginBottom="6dp" />
 
-        <EditText
-            android:id="@+id/et_device_describe"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/device_description_hint"
-            android:inputType="text"
-            android:textColor="@color/text_primary"
-            android:background="@color/surface"
-            android:textColorHint="@color/text_hint"
-            android:padding="12dp"
-            android:layout_marginBottom="20dp" />
+            <EditText
+                android:id="@+id/et_device_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/device_name_hint"
+                android:inputType="text"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/bg_input"
+                android:textColorHint="@color/text_hint"
+                android:padding="12dp"
+                android:layout_marginBottom="16dp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/backup_path"
-            android:textSize="14sp"
-            android:textColor="@color/text_secondary"
-            android:layout_marginBottom="4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/device_description"
+                android:textSize="13sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginBottom="6dp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/backup_path_description"
-            android:textSize="12sp"
-            android:textColor="@color/text_hint"
-            android:layout_marginBottom="8dp" />
+            <EditText
+                android:id="@+id/et_device_describe"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/device_description_hint"
+                android:inputType="text"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/bg_input"
+                android:textColorHint="@color/text_hint"
+                android:padding="12dp"
+                android:layout_marginBottom="16dp" />
 
-        <EditText
-            android:id="@+id/et_backup_path"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/backup_path_hint"
-            android:inputType="text"
-            android:textColor="@color/text_primary"
-            android:background="@color/surface"
-            android:textColorHint="@color/text_hint"
-            android:padding="12dp"
-            android:layout_marginBottom="20dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/backup_path"
+                android:textSize="13sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginBottom="2dp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/max_backup_count"
-            android:textSize="14sp"
-            android:textColor="@color/text_secondary"
-            android:layout_marginBottom="4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/backup_path_description"
+                android:textSize="12sp"
+                android:textColor="@color/text_hint"
+                android:layout_marginBottom="6dp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/max_backup_count_description"
-            android:textSize="12sp"
-            android:textColor="@color/text_hint"
-            android:layout_marginBottom="8dp" />
+            <EditText
+                android:id="@+id/et_backup_path"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/backup_path_hint"
+                android:inputType="text"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/bg_input"
+                android:textColorHint="@color/text_hint"
+                android:padding="12dp"
+                android:layout_marginBottom="16dp" />
 
-        <EditText
-            android:id="@+id/et_backup_max"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="5"
-            android:inputType="number"
-            android:textColor="@color/text_primary"
-            android:background="@color/surface"
-            android:textColorHint="@color/text_hint"
-            android:padding="12dp"
-            android:layout_marginBottom="20dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/max_backup_count"
+                android:textSize="13sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginBottom="2dp" />
 
-        <Switch
-            android:id="@+id/sw_log_enabled"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/write_error_log"
-            android:textSize="14sp"
-            android:textColor="@color/text_primary"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp"
-            android:layout_marginBottom="4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/max_backup_count_description"
+                android:textSize="12sp"
+                android:textColor="@color/text_hint"
+                android:layout_marginBottom="6dp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/log_path_hint"
-            android:textSize="12sp"
-            android:textColor="@color/text_hint"
-            android:layout_marginBottom="20dp" />
+            <EditText
+                android:id="@+id/et_backup_max"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="5"
+                android:inputType="number"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/bg_input"
+                android:textColorHint="@color/text_hint"
+                android:padding="12dp"
+                android:layout_marginBottom="8dp" />
+
+            <Switch
+                android:id="@+id/sw_log_enabled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/write_error_log"
+                android:textSize="14sp"
+                android:textColor="@color/text_primary"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/log_path_hint"
+                android:textSize="12sp"
+                android:textColor="@color/text_hint" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/btn_save"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/save_config"
-            android:backgroundTint="@color/primary" />
+            android:textColor="@color/primary_text_on"
+            android:background="@drawable/bg_button_primary"
+            android:textSize="15sp"
+            android:layout_marginBottom="8dp" />
 
         <TextView
             android:id="@+id/tv_footer"
@@ -151,7 +164,7 @@
             android:textColor="@color/text_hint"
             android:textColorLink="@color/primary"
             android:autoLink="web"
-            android:layout_marginTop="24dp" />
-
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp" />
     </LinearLayout>
 </ScrollView>

@@ -2,22 +2,50 @@ plugins {
     id 'com.android.application'
 }
 
+// release 签名：从根目录 keystore.properties 注入（HIGH-21）
+// 文件不存在时 release 构建不配置签名，避免用 debug 密钥发布
+def keystoreProps = new Properties()
+def keystorePropsFile = rootProject.file('keystore.properties')
+def hasReleaseKeystore = keystorePropsFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
 android {
-    namespace 'com.zgcwkj.xpmibackup'
+    namespace 'com.suileyan.xpmibackup'
     compileSdk 36
     buildToolsVersion "36.0.0"
 
     defaultConfig {
-        applicationId "com.zgcwkj.xpmibackup"
+        applicationId "com.suileyan.xpmibackup"
         minSdk 28
         targetSdk 36
-        versionCode 260722
-        versionName "1.5"
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    // signingConfigs 必须在 buildTypes 之前声明（NEW-H-04）：
+    // buildTypes 内引用 signingConfigs.release 时，配置必须已定义，否则提供 keystore 时抛 UnknownPropertyException
+    signingConfigs {
+        debug {
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+        release {
+            v1SigningEnabled true
+            v2SigningEnabled true
+            if (hasReleaseKeystore) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
     }
 
     buildTypes {
         release {
-            // 代码混淆
+            // 代码混淆（Xposed 入口与 Hook 类已在 proguard-rules.pro 中 keep）
             minifyEnabled false
 
             // 移除没用的资源文件
@@ -30,23 +58,24 @@ android {
             // the Android Gradle plugin. To learn more, go to the section about
             // R8 configuration files.
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-    }
 
-    signingConfigs {
-        debug {
-            v1SigningEnabled true
-            v2SigningEnabled true
-        }
-        release {
-            v1SigningEnabled true
-            v2SigningEnabled true
+            // 有 keystore.properties 时使用 release 签名，否则不签名（避免误用 debug 密钥）
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
     packaging {
         resources {
-            excludes += "META-INF/**"
+            // 只排除许可声明类文件，保留 META-INF/services/**（ServiceLoader 依赖，MED-40）
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/NOTICE"
+            excludes += "META-INF/NOTICE.txt"
+            excludes += "META-INF/LICENSE"
+            excludes += "META-INF/LICENSE.txt"
+            excludes += "META-INF/AL2.0"
+            excludes += "META-INF/LGPL2.1"
             excludes += "DebugProbesKt.bin"
         }
     }

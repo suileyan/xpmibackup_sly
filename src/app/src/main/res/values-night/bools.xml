@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色主题：状态栏深色背景 → 图标用浅色（默认） -->
+    <bool name="light_status_bar_icons">false</bool>
+</resources>

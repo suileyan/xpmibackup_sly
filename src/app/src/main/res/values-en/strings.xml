@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Cloud Backup Assistant</string>
+    <string name="app_name">miback_sly</string>
     <string name="settings_name">Cloud Backup Assistant</string>
     <string name="xposed_description">Cloud Backup Assistant - back up to your own cloud storage device</string>
     <string name="author">zgcwkj</string>
@@ -8,10 +8,99 @@
     <string name="footer_text">Powered by <a href="http://www.zgcwkj.cn">zgcwkj</a></string>
 
     <string name="action_backup">Backup</string>
+    <string name="settings_title">Settings</string>
+    <string name="about_title">About</string>
+    <string name="theme_mode">App theme</string>
+    <string name="theme_system">Follow system</string>
+    <string name="theme_day">Day</string>
+    <string name="theme_night">Night</string>
+    <string name="predictive_back">Predictive back</string>
+    <string name="predictive_back_hint">Show system predictive animation on gesture back</string>
+    <string name="about_version">Version %1$s</string>
+    <string name="about_coming_soon">About page is under construction</string>
     <string name="tab_device_config">Device</string>
-    <string name="tab_service_config">Service</string>
+    <string name="tab_service_config">NAS</string>
+    <string name="tab_account_config">Cloud</string>
+    <string name="tab_backup_config">Backup</string>
     <string name="title_device_config">Device settings</string>
-    <string name="title_service_config">Service settings</string>
+    <string name="title_service_config">NAS settings</string>
+    <string name="title_account_config">Cloud accounts</string>
+    <string name="title_backup_config">Backup</string>
+
+    <string name="add_account">Add cloud account</string>
+    <string name="account_type">Account type</string>
+    <string name="account_type_smb">SMB/CIFS</string>
+    <string name="account_type_webdav">WebDAV</string>
+    <string name="account_type_custom">Custom script</string>
+    <string name="account_name">Account name</string>
+    <string name="account_name_hint">Example: My NAS</string>
+    <string name="no_account_hint">No accounts yet. Tap the button below to add one.</string>
+    <string name="cloud_login_coming_soon">Cloud drive login coming soon</string>
+    <string name="cloud_login_coming_soon_hint">Future versions will support logging in to Baidu Netdisk, Aliyun Drive and more, then selecting one as the backup target.</string>
+
+    <string name="profile_name">Profile name</string>
+    <string name="profile_name_hint">Example: Home NAS</string>
+    <string name="test_then_save">Test then save</string>
+    <string name="toast_profile_name_required">Please enter a profile name.</string>
+    <string name="toast_profile_saved">Profile saved and activated.</string>
+    <string name="toast_profile_test_failed">Connection failed. Not saved.</string>
+
+    <string name="backup_method">Backup method</string>
+    <string name="backup_method_nas">NAS backup</string>
+    <string name="backup_method_nas_hint">Back up to your own NAS device</string>
+    <string name="backup_method_cloud">Cloud drive backup</string>
+    <string name="backup_method_cloud_hint">Back up to a logged-in cloud account</string>
+    <string name="select_profile">Select profile</string>
+    <string name="cloud_backup_coming_soon">Cloud drive backup coming soon</string>
+    <string name="start_backup">Start backup</string>
+    <string name="toast_no_profile">Please save a profile in the NAS page first.</string>
+    <string name="toast_cloud_backup_coming">Cloud drive backup is not available yet.</string>
+    <string name="active_account_mark">Active</string>
+    <string name="set_active">Set active</string>
+    <string name="edit_account">Edit</string>
+    <string name="delete_account">Delete</string>
+    <string name="toast_no_active_account">Please add and activate an account first.</string>
+    <string name="toast_account_saved">Account saved.</string>
+    <string name="toast_account_removed">Account deleted.</string>
+    <string name="toast_press_again_exit">Press back again to exit</string>
+    <string name="toast_account_activated">Backup target switched.</string>
+    <string name="toast_account_exists">An account with this name already exists.</string>
+
+    <string name="add_cloud_account">Add cloud drive account</string>
+    <string name="no_cloud_account_hint">No cloud drive accounts yet. Tap the button above to add one.</string>
+    <string name="title_cloud_login_139">Add 139 cloud drive account</string>
+    <string name="cloud_mobile">Mobile number</string>
+    <string name="cloud_mobile_hint">Example: 13800138000</string>
+    <string name="cloud_login_139">Log in</string>
+    <string name="cloud_login_fallback_tip">Note: auto login may fail if the API changes. If so, log in at yun.139.com and paste the Authorization value (after \"Basic \") into the field below.</string>
+    <string name="cloud_authorization">Authorization</string>
+    <string name="cloud_authorization_hint">Paste the content after \"Basic \" from the Authorization header on yun.139.com</string>
+    <string name="cloud_auth_validate_save">Validate and save</string>
+    <string name="cloud_account_name_format">139 · %1$s</string>
+    <string name="account_no_info">No account info</string>
+    <string name="cloud_account_default_name">139 Cloud Drive</string>
+    <string name="toast_cloud_mobile_password_required">Please enter mobile number and password.</string>
+    <string name="toast_cloud_auto_login_failed">Auto login failed. Please paste the Authorization.</string>
+    <string name="toast_cloud_auth_required">Please paste the Authorization.</string>
+    <string name="toast_cloud_auth_invalid">Authorization validation failed. Please check.</string>
+    <string name="toast_cloud_account_saved">Cloud drive account saved.</string>
+    <string name="toast_cloud_account_save_failed">Failed to save cloud drive account.</string>
+
+    <string name="select_cloud_account">Select a logged-in cloud drive</string>
+    <string name="cloud_transfer_coming_soon">Backup will be uploaded to the selected cloud account</string>
+    <string name="toast_no_cloud_account">Please add a cloud drive account on the Cloud page first.</string>
+    <string name="toast_cloud_transfer_coming">Cloud drive transfer is not available yet. Please use NAS backup.</string>
+
+    <string name="title_cloud_provider_select">Select cloud drive</string>
+    <string name="cloud_provider_139">139 Cloud Drive (Mobile)</string>
+    <string name="cloud_provider_139_hint">In-app web login</string>
+    <string name="cloud_provider_guangya">Guangya Cloud</string>
+    <string name="cloud_provider_guangya_hint">In-app web login</string>
+    <string name="title_webview_login">Log in to 139 Cloud Drive</string>
+    <string name="title_webview_login_guangya">Log in to Guangya Cloud Drive</string>
+    <string name="webview_login_done">Done</string>
+    <string name="webview_login_tip">Log in on the page, then tap "Done" in the top-right corner.</string>
+    <string name="toast_webview_no_auth">No login info detected. Please finish login and try again.</string>
 
     <string name="device_name">Device name</string>
     <string name="device_name_hint">Example: Remote backup device</string>
@@ -49,6 +138,9 @@
     <string name="toast_backup_app_missing">Backup app not found. Please make sure Xiaomi Backup is installed.</string>
     <string name="toast_market_app_missing">Xiaomi App Store not found.</string>
     <string name="toast_config_saved">Configuration saved.</string>
+    <string name="toast_device_name_required">Device name is required.</string>
+    <string name="toast_backup_path_required">Backup path is required.</string>
+    <string name="toast_backup_max_invalid">Max backup count must be a non-negative integer.</string>
     <string name="toast_connection_success">Connection succeeded. Configuration saved.</string>
     <string name="toast_connection_failed">Configuration saved, but the connection failed. Please check the settings.</string>
 </resources>

@@ -1,10 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#43A047</color>
+    <!-- LSPosed 同款黑白灰（深色）：主色 = 近白 -->
+    <color name="primary">#E8EAED</color>
+    <color name="primary_dark">#FFFFFF</color>
+    <color name="primary_light">#2E2E2E</color>
+    <color name="primary_text_on">#121212</color>
+
+    <!-- 背景与表面 -->
     <color name="background">#121212</color>
     <color name="surface">#1E1E1E</color>
-    <color name="text_primary">#E0E0E0</color>
-    <color name="text_secondary">#AAAAAA</color>
-    <color name="text_disabled">#666666</color>
-    <color name="text_hint">#777777</color>
+    <color name="input_bg">#2A2A2A</color>
+    <color name="card_border">#33FFFFFF</color>
+    <color name="divider">#1FFFFFFF</color>
+
+    <!-- 文字 -->
+    <color name="text_primary">#E8EAED</color>
+    <color name="text_secondary">#B0B6BF</color>
+    <color name="text_disabled">#6E7278</color>
+    <color name="text_hint">#7A7F87</color>
+
+    <!-- Tab 选中态：白色 15% -->
+    <color name="tab_selected_bg">#26E8EAED</color>
+
+    <!-- 语义色 -->
+    <color name="danger">#F28B82</color>
+    <color name="status_bar">#121212</color>
 </resources>

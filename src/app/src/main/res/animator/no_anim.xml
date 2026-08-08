@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 0ms 无变化动画：用作 overlay 返回时的 popEnter/popExit 占位。
+     预测返回由 BackAnimCallback 用容器 translationX 自绘（推开到底），
+     若 pop 时播放 fragment 转场动画，会与"容器归位"叠加导致页面归位再动画闪烁。 -->
+<set xmlns:android="http://schemas.android.com/apk/res/android">
+    <objectAnimator
+        android:propertyName="translationX"
+        android:duration="0"
+        android:valueType="floatType"
+        android:valueFrom="0"
+        android:valueTo="0" />
+</set>

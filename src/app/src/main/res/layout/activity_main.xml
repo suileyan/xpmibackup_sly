@@ -10,57 +10,77 @@
         android:id="@+id/status_bar_spacer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:background="@color/primary" />
+        android:background="@color/status_bar" />
 
-    <!-- 顶部标题栏 -->
+    <!-- 顶部标题栏：LSPosed 风格主色条 -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:background="@color/primary"
+        android:layout_height="56dp"
+        android:background="@color/status_bar"
         android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="8dp">
+        android:paddingStart="20dp"
+        android:paddingEnd="4dp">
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="@string/app_name"
-            android:textSize="20sp"
+            android:textSize="19sp"
             android:textStyle="bold"
-            android:textColor="@android:color/white" />
+            android:textColor="@color/text_primary"
+            android:letterSpacing="0.02" />
 
-        <!-- 跳转到备份APP的智能存储(NAS)备份页面 -->
+        <!-- 顶部菜单：点击弹出 设置 / 关于 -->
         <TextView
-            android:id="@+id/btn_open_backup"
+            android:id="@+id/btn_top_menu"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/action_backup"
-            android:textSize="15sp"
-            android:textColor="@android:color/white"
+            android:text="···"
+            android:textSize="20sp"
+            android:letterSpacing="-0.15"
+            android:textColor="@color/text_primary"
             android:clickable="true"
             android:focusable="true"
             android:background="?android:attr/selectableItemBackground"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp" />
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp" />
     </LinearLayout>
 
-    <!-- 内容区域 -->
+    <!-- 内容区域：tab层(4页面常驻横向排开) + overlay层(二级页面) -->
     <FrameLayout
-        android:id="@+id/fragment_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1">
 
-    <!-- 底部Tab栏 -->
+        <FrameLayout
+            android:id="@+id/fragment_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipChildren="false" />
+
+        <FrameLayout
+            android:id="@+id/overlay_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@android:color/transparent"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- 底部Tab栏：LSPosed 风格胶囊选中态 -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="56dp"
+        android:layout_height="64dp"
         android:background="@color/surface"
         android:orientation="horizontal"
-        android:elevation="8dp">
+        android:gravity="center"
+        android:elevation="8dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp">
 
         <!-- 设备配置Tab -->
         <LinearLayout
@@ -72,14 +92,15 @@
             android:gravity="center"
             android:clickable="true"
             android:focusable="true"
-            android:background="?android:attr/selectableItemBackground">
+            android:background="@drawable/bg_tab_selected">
 
-            <TextView
+            <ImageView
                 android:id="@+id/tab_device_icon"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="📱"
-                android:textSize="20sp" />
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_tab_device"
+                android:importantForAccessibility="no"
+                android:layout_marginBottom="2dp" />
 
             <TextView
                 android:id="@+id/tab_device_text"
@@ -100,20 +121,79 @@
             android:gravity="center"
             android:clickable="true"
             android:focusable="true"
-            android:background="?android:attr/selectableItemBackground">
+            android:background="@drawable/bg_tab_selected">
 
-            <TextView
+            <ImageView
                 android:id="@+id/tab_service_icon"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="⚙️"
-                android:textSize="20sp" />
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_tab_nas"
+                android:importantForAccessibility="no"
+                android:layout_marginBottom="2dp" />
 
             <TextView
                 android:id="@+id/tab_service_text"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/tab_service_config"
+                android:textSize="11sp"
+                android:textColor="@color/text_disabled" />
+        </LinearLayout>
+
+        <!-- 账号管理Tab -->
+        <LinearLayout
+            android:id="@+id/tab_account"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="@drawable/bg_tab_selected">
+
+            <ImageView
+                android:id="@+id/tab_account_icon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_tab_cloud"
+                android:importantForAccessibility="no"
+                android:layout_marginBottom="2dp" />
+
+            <TextView
+                android:id="@+id/tab_account_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/tab_account_config"
+                android:textSize="11sp"
+                android:textColor="@color/text_disabled" />
+        </LinearLayout>
+
+        <!-- 备份Tab -->
+        <LinearLayout
+            android:id="@+id/tab_backup"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="@drawable/bg_tab_selected">
+
+            <ImageView
+                android:id="@+id/tab_backup_icon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_tab_backup"
+                android:importantForAccessibility="no"
+                android:layout_marginBottom="2dp" />
+
+            <TextView
+                android:id="@+id/tab_backup_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/tab_backup_config"
                 android:textSize="11sp"
                 android:textColor="@color/text_disabled" />
         </LinearLayout>

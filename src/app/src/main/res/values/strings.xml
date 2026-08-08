@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">云备份助手</string>
+    <string name="app_name">miback_sly</string>
     <string name="settings_name">云备份助手</string>
     <string name="xposed_description">云备份助手 - 支持备份到自己的云端设备</string>
     <string name="author">zgcwkj</string>
@@ -8,10 +8,24 @@
     <string name="footer_text">Powered by <a href="http://www.zgcwkj.cn">zgcwkj</a></string>
 
     <string name="action_backup">备份</string>
+    <string name="settings_title">设置</string>
+    <string name="about_title">关于</string>
+    <string name="theme_mode">应用主题</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_day">白昼</string>
+    <string name="theme_night">黑夜</string>
+    <string name="predictive_back">预测性返回</string>
+    <string name="predictive_back_hint">全面屏手势返回时显示系统预测动画</string>
+    <string name="about_version">版本 %1$s</string>
+    <string name="about_coming_soon">关于页内容筹备中</string>
     <string name="tab_device_config">设备配置</string>
-    <string name="tab_service_config">服务配置</string>
+    <string name="tab_service_config">NAS</string>
+    <string name="tab_account_config">云盘</string>
+    <string name="tab_backup_config">备份</string>
     <string name="title_device_config">设备配置</string>
-    <string name="title_service_config">服务配置</string>
+    <string name="title_service_config">NAS 配置</string>
+    <string name="title_account_config">云盘账号</string>
+    <string name="title_backup_config">备份</string>
 
     <string name="device_name">设备名称</string>
     <string name="device_name_hint">例: 远程备份设备</string>
@@ -49,6 +63,84 @@
     <string name="toast_backup_app_missing">未找到备份APP，请确认已安装小米备份</string>
     <string name="toast_market_app_missing">未找到小米应用商店</string>
     <string name="toast_config_saved">配置已保存</string>
+    <string name="toast_device_name_required">设备名称不能为空</string>
+    <string name="toast_backup_path_required">备份路径不能为空</string>
+    <string name="toast_backup_max_invalid">最大备份数必须是非负整数</string>
     <string name="toast_connection_success">连接成功，配置已保存</string>
     <string name="toast_connection_failed">配置已保存，但连接失败，请检查参数</string>
+
+    <string name="add_account">添加云盘账号</string>
+    <string name="account_type">账号类型</string>
+    <string name="account_type_smb">SMB/CIFS</string>
+    <string name="account_type_webdav">WebDAV</string>
+    <string name="account_type_custom">自定义脚本</string>
+    <string name="account_name">账号名称</string>
+    <string name="account_name_hint">例: 我的NAS</string>
+    <string name="no_account_hint">暂无账号，点击下方按钮添加</string>
+    <string name="cloud_login_coming_soon">网盘登录功能开发中</string>
+    <string name="cloud_login_coming_soon_hint">后续版本将支持登录百度网盘、阿里云盘等账号，登录后即可选择作为备份目标</string>
+
+    <string name="profile_name">配置名称</string>
+    <string name="profile_name_hint">例: 家庭NAS</string>
+    <string name="test_then_save">测试通过后保存</string>
+    <string name="toast_profile_name_required">请输入配置名称</string>
+    <string name="toast_profile_saved">方案已保存并激活</string>
+    <string name="toast_profile_test_failed">连接失败，未保存</string>
+
+    <string name="backup_method">备份方式</string>
+    <string name="backup_method_nas">NAS 备份</string>
+    <string name="backup_method_nas_hint">备份到自建 NAS 设备</string>
+    <string name="backup_method_cloud">云盘备份</string>
+    <string name="backup_method_cloud_hint">备份到已登录网盘账号</string>
+    <string name="select_profile">选择配置方案</string>
+    <string name="cloud_backup_coming_soon">云盘备份待开发</string>
+    <string name="start_backup">开始备份</string>
+    <string name="toast_no_profile">请先在 NAS 页保存配置方案</string>
+    <string name="toast_cloud_backup_coming">云盘备份功能待开发</string>
+    <string name="active_account_mark">当前目标</string>
+    <string name="set_active">设为活跃</string>
+    <string name="edit_account">编辑</string>
+    <string name="delete_account">删除</string>
+    <string name="toast_no_active_account">请先添加并激活一个账号</string>
+    <string name="toast_account_saved">账号已保存</string>
+    <string name="toast_account_removed">账号已删除</string>
+    <string name="toast_press_again_exit">再按一次退出应用</string>
+    <string name="toast_account_activated">已切换备份目标</string>
+    <string name="toast_account_exists">该名称账号已存在</string>
+
+    <string name="add_cloud_account">添加云盘账号</string>
+    <string name="no_cloud_account_hint">暂无云盘账号，点击上方按钮添加</string>
+    <string name="title_cloud_login_139">添加 139 云盘账号</string>
+    <string name="cloud_mobile">手机号</string>
+    <string name="cloud_mobile_hint">例: 13800138000</string>
+    <string name="cloud_login_139">登录</string>
+    <string name="cloud_login_fallback_tip">提示：自动登录可能因接口变动失败，失败后请登录 yun.139.com，复制 Authorization（Basic 后面的值）粘贴到下方输入框</string>
+    <string name="cloud_authorization">Authorization</string>
+    <string name="cloud_authorization_hint">粘贴 yun.139.com 登录后 Authorization 中 Basic 后面的内容</string>
+    <string name="cloud_auth_validate_save">校验并保存</string>
+    <string name="cloud_account_name_format">139 · %1$s</string>
+    <string name="account_no_info">未获取账号信息</string>
+    <string name="cloud_account_default_name">139 云盘</string>
+    <string name="toast_cloud_mobile_password_required">请输入手机号和密码</string>
+    <string name="toast_cloud_auto_login_failed">自动登录未成功，请粘贴 Authorization</string>
+    <string name="toast_cloud_auth_required">请粘贴 Authorization</string>
+    <string name="toast_cloud_auth_invalid">Authorization 校验失败，请检查</string>
+    <string name="toast_cloud_account_saved">云盘账号已保存</string>
+    <string name="toast_cloud_account_save_failed">云盘账号保存失败</string>
+
+    <string name="select_cloud_account">选择已登录云盘</string>
+    <string name="cloud_transfer_coming_soon">将备份到所选云盘账号</string>
+    <string name="toast_no_cloud_account">请先在云盘页添加云盘账号</string>
+    <string name="toast_cloud_transfer_coming">云盘传输功能待开发，请选择 NAS 备份</string>
+
+    <string name="title_cloud_provider_select">选择网盘</string>
+    <string name="cloud_provider_139">139 云盘（移动云盘）</string>
+    <string name="cloud_provider_139_hint">应用内网页登录</string>
+    <string name="cloud_provider_guangya">光鸭云盘</string>
+    <string name="cloud_provider_guangya_hint">应用内网页登录</string>
+    <string name="title_webview_login">登录 139 云盘</string>
+    <string name="title_webview_login_guangya">登录光鸭云盘</string>
+    <string name="webview_login_done">完成</string>
+    <string name="webview_login_tip">请在网页中登录账号，完成后点击右上角「完成」</string>
+    <string name="toast_webview_no_auth">未检测到登录信息，请完成登录后重试</string>
 </resources>

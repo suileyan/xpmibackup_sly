@@ -7,6 +7,10 @@ build/
 local.properties
 build_install.bat
 
+# 内部审查 / 修复记录（不作为公开交付物）
+docs/code-review-*.md
+docs/fix-summary*.md
+
 # Log/OS Files
 *.log
 

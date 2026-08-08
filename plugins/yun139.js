@@ -135,12 +135,13 @@ function mcloudSign(body) {
 
 // 构造移动云盘 API 请求头
 // 这些 x-yun-* 头来自移动云盘客户端抓包，缺失时部分接口会拒绝
+// 注意：不要提交真实设备指纹（MAC/设备唯一标识），统一用占位值（HIGH-23）
 function apiHeaders(extra, contentType) {
   var headers = {
     'x-yun-op-type': '1',
     'x-yun-sub-op-type': '100',
     'x-yun-api-version': 'v1',
-    'x-yun-client-info': '6|127.0.0.1|1|12.1.0|realme|RMX5060|BCFF2BBA6881DD8E4971803C63DDB5E4|02-00-00-00-00-00|android 15|1264X2592|zh||||032|0|',
+    'x-yun-client-info': '6|127.0.0.1|1|12.1.0|realme|RMX5060|00000000000000000000000000000000|00-00-00-00-00-00|android 15|1264X2592|zh||||032|0|',
     'x-yun-app-channel': '10000023',
     'x-yun-channel-source': '10000034',
     'x-yun-module-type': '100',
