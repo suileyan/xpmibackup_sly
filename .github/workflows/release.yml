@@ -54,6 +54,23 @@ jobs:
             echo "::warning::KEYSTORE_BASE64 secret not set - building UNSIGNED release APK"
           fi
 
+      # 从 tag 自动同步版本号：v0.2.1 → versionName "0.2.1"，versionCode 201（主*10000+次*100+补丁）。
+      # 仅 tag 触发时执行；workflow_dispatch 手动触发时沿用仓库内版本号。
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag format must be vX.Y.Z (got: $GITHUB_REF_NAME)"
+            exit 1
+          fi
+          MAJOR="${VERSION%%.*}"; REST="${VERSION#*.}"; MINOR="${REST%%.*}"; PATCH="${REST#*.}"
+          VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" src/app/build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" src/app/build.gradle
+          echo "::notice::Version synced from tag: versionName=$VERSION versionCode=$VERSION_CODE"
+          grep -E "versionCode|versionName" src/app/build.gradle
+
       - name: Build release APK
         run: |
           cd src
