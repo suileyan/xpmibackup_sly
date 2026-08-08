@@ -6,13 +6,33 @@
 // 3. 脚本负责把小米备份传入的远端路径转换成你的服务端接口请求
 //
 // 宿主提供的函数
-// httpRequest(spec) 执行普通 HTTP 请求，并返回 { code, body, headers }
+// 完整清单见 plugins/README.md，这里列出常用函数
+// httpRequest(spec) 执行普通 HTTP 请求，并返回 { code, body, headers }；spec 支持 connectTimeout/readTimeout/writeTimeout（秒，上限 300）
 // httpDownload(spec) 执行下载请求，并把响应流写入 ctx.localPath 指向的文件，返回 { code, body, headers }
+// httpRequestMultipart(spec) multipart 表单上传，fields 文本字段 + parts 文件字段（file 必须来自 tempFile）
+// httpHead(url, headers) HEAD 请求，探测文件大小 / ETag
+// getResponseHeader(response, name) 取响应头，大小写不敏感
 // stateGet(key, defaultValue) 读取持久化脚本状态，适合保存刷新后的 cookie/token
 // stateSet(key, value) 写入持久化脚本状态
 // base64Encode(text) 把 UTF-8 文本编码为 Base64
 // base64Decode(text) 把 Base64 解码为 UTF-8 文本
 // hashHex(algorithm, text) 计算文本摘要，例如 hashHex('MD5', text)、hashHex('SHA-256', text)
+// hashHexBytes(algorithm, base64Bytes) 对 Base64 二进制数据计算摘要
+// hmacHex(algorithm, key, message) HMAC 摘要（hex），例如 hmacHex('HmacSHA256', key, msg)
+// hmacBase64(algorithm, key, message) HMAC 摘要（Base64），AWS SigV4 风格签名
+// aesEncrypt(keyBase64, ivBase64, data) / aesDecrypt(keyBase64, ivBase64, dataBase64) AES-GCM 加解密
+// sha256Hex(text) / md5Hex(text) 常用摘要快捷封装
+// tempFile(prefix, suffix) 创建脚本临时目录下的临时文件，返回绝对路径
+// tempFileName() 生成唯一临时文件名（不落盘）
+// readTempFile(path) / writeTempFile(path, base64Data) / deleteTempFile(path) 临时文件读写删（read 限 16MB）
+// fileHashHex(path, algorithm) / fileSize(path) 临时文件流式哈希 / 大小
+// uuid() / timestampSeconds() / timestampMillis() / randomHex(byteLength) 通用工具
+// console.log(...args) / console.error(...args) 调试日志
+//
+// 安全边界：脚本无法访问任何 Java 类（Java.type / 反射 / getClass().forName 均不可用）；
+// eval / Function / runCommand / spawn / sync / quit / load 已禁用；
+// 单次调用 30 秒超时（死循环 / ReDoS 自动终止）；
+// 默认禁止内网地址（SSRF 防护），临时文件只能读写当前账号目录。
 //
 // 请求对象 spec 字段
 // method: HTTP 方法，默认 GET
@@ -225,3 +245,47 @@ function deletePath(ctx) {
 //     'Authorization': 'Bearer your-token'
 //   }
 // });
+//
+// HMAC 签名示例（OSS / 网关签名，完整示例见 hmac-sign-example.js）
+// var ts = String(timestampSeconds());
+// var signature = hmacBase64('HmacSHA256', 'your-secret-key', 'GET\n/backup/path\n' + ts);
+// var signedResponse = httpRequest({
+//   method: 'GET',
+//   url: 'https://example.com/signed',
+//   headers: { 'X-Timestamp': ts, 'X-Signature': signature }
+// });
+//
+// 自定义超时请求示例（大文件慢链接，httpRequest 的 spec 直接支持超时字段）
+// var slowResponse = httpRequest({
+//   method: 'GET',
+//   url: 'https://example.com/big-file',
+//   headers: auth(),
+//   readTimeout: 120,
+//   readBody: false
+// });
+//
+// 读取响应头示例（大小写不敏感）
+// var size = getResponseHeader(downloadResponse, 'Content-Length');
+//
+// HEAD 探测示例
+// var head = httpHead('https://example.com/file', { 'Authorization': 'Bearer token' });
+// console.log('file exists:', head.code >= 200 && head.code < 300);
+//
+// multipart 上传示例（file 必须来自 tempFile）
+// var tmp = tempFile('part', '.bin');
+// writeTempFile(tmp, base64Encode('binary payload'));
+// var formResponse = httpRequestMultipart({
+//   method: 'POST',
+//   url: 'https://example.com/form',
+//   headers: auth(),
+//   fields: { path: ctx.remotePath },
+//   parts: [{ name: 'file', file: tmp, filename: 'part.bin', contentType: 'application/octet-stream' }]
+// });
+// deleteTempFile(tmp);
+//
+// 临时文件哈希示例（大文件秒传）
+// var hash = fileHashHex(tmp, 'SHA-256');
+//
+// 请求 ID / nonce 示例
+// var requestId = uuid();
+// var nonce = randomHex(8);

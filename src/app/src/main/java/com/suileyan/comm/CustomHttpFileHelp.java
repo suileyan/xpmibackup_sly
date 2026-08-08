@@ -47,6 +47,9 @@ public class CustomHttpFileHelp {
     /** 编译脚本缓存上限：超过后清空，防止多方案脚本导致缓存无界增长 */
     private static final int SCRIPT_CACHE_MAX = 8;
 
+    /** httpRequest 自定义超时上限（秒），防脚本挂死请求线程（沙箱 v2） */
+    private static final long MAX_SCRIPT_TIMEOUT_SECONDS = 300L;
+
     private static volatile OkHttpClient sClient;
 
     private static volatile String sDefaultScript;
@@ -226,12 +229,12 @@ public class CustomHttpFileHelp {
     // ========== 脚本与HTTP ==========
 
     /** 执行脚本生成的HTTP请求；默认会把响应体读入内存，适合小响应 */
-    private static ScriptResponse execute(RequestSpec spec, RequestBody streamBody) throws Exception {
+    static ScriptResponse execute(RequestSpec spec, RequestBody streamBody) throws Exception {
         return execute(spec, streamBody, true);
     }
 
     /** 执行HTTP请求；下载大文件/分片时设置readBody=false以保持流式读取 */
-    private static ScriptResponse execute(RequestSpec spec, RequestBody streamBody, boolean readBody) throws Exception {
+    static ScriptResponse execute(RequestSpec spec, RequestBody streamBody, boolean readBody) throws Exception {
         if (spec == null || spec.url == null || spec.url.isEmpty()) {
             throw new IllegalArgumentException("custom script returned empty request url");
         }
@@ -243,13 +246,24 @@ public class CustomHttpFileHelp {
         var method = spec.method != null ? spec.method.toUpperCase(Locale.ROOT) : "GET";
         var body = streamBody != null ? streamBody : bodyFromSpec(spec);
         builder.method(method, methodAllowsRequestBody(method) ? body : null);
-        var response = getClient().newCall(builder.build()).execute();
+        // spec 指定了自定义超时（httpRequest 的 connectTimeout/readTimeout/writeTimeout）时，基于共享 client 派生带超时的实例；
+        // 网络拦截器（重定向 SSRF 二次校验）在 newBuilder 后保留（沙箱 v2）
+        var client = getClient();
+        if (spec.connectTimeout != null || spec.readTimeout != null || spec.writeTimeout != null) {
+            var b = client.newBuilder();
+            if (spec.connectTimeout != null) b.connectTimeout(spec.connectTimeout, TimeUnit.SECONDS);
+            if (spec.readTimeout != null) b.readTimeout(spec.readTimeout, TimeUnit.SECONDS);
+            if (spec.writeTimeout != null) b.writeTimeout(spec.writeTimeout, TimeUnit.SECONDS);
+            client = b.build();
+        }
+        var response = client.newCall(builder.build()).execute();
         var result = new ScriptResponse();
         result.code = response.code();
         result.response = response;
+        // 保留同名响应头的全部值：单值时脚本读 headers[name] 仍是字符串，多值时为数组（沙箱 v2）
         result.headers = new LinkedHashMap<>();
         for (var name : response.headers().names()) {
-            result.headers.put(name, response.header(name, ""));
+            result.headers.put(name, response.headers(name));
         }
         if (readBody && response.body() != null) {
             result.body = response.body().string();
@@ -371,13 +385,16 @@ public class CustomHttpFileHelp {
 
     /** 在Rhino解释模式中执行脚本函数，并关闭Java类访问以降低误用风险 */
     private static Object callFunction(String functionName, Map<String, Object> ctxMap, Map<String, Object> responseMap, boolean required) throws Exception {
-        var cx = Context.enter();
+        // 每次调用使用独立 factory：获得独立执行 deadline，指令计数超时互不干扰（沙箱 v2）
+        var cx = ScriptWatchdog.newFactory().enterContext();
         try {
             cx.setOptimizationLevel(-1);
             cx.setLanguageVersion(Context.VERSION_ES6);
             cx.setClassShutter(className -> false);
             var scope = cx.initStandardObjects();
-            installUtilityFunctions(scope);
+            // 删除危险内置函数，阻断 eval/Function 动态代码生成与 Rhino 命令执行扩展（沙箱 v2）
+            removeDangerousBuiltins(scope);
+            ScriptFunctions.install(scope);
             getCompiledScript().exec(cx, scope);
             var fn = ScriptableObject.getProperty(scope, functionName);
             if (!(fn instanceof org.mozilla.javascript.Function)) {
@@ -393,6 +410,38 @@ public class CustomHttpFileHelp {
         } finally {
             Context.exit();
         }
+    }
+
+    /** Rhino 内置危险全局函数（沙箱 v2）
+     * eval / Function：动态代码生成入口，可绕过字符串层面的静态审查；
+     * runCommand / spawn / sync / quit：Rhino 扩展，直接操作系统进程能力，不经过 ClassShutter；
+     * load：可加载本地文件或远端 URL，存在文件读取与 SSRF 风险。
+     * 删除失败（属性不可删除）时用抛错 stub 覆盖，确保脚本无法调用。 */
+    private static final java.util.List<String> DANGEROUS_BUILTINS = java.util.List.of(
+            "eval", "Function", "runCommand", "spawn", "sync", "quit", "load");
+
+    private static void removeDangerousBuiltins(Scriptable scope) {
+        for (var name : DANGEROUS_BUILTINS) {
+            try {
+                ScriptableObject.deleteProperty(scope, name);
+            } catch (Exception e) {
+                LogHelp.w(TAG, "delete builtin '" + name + "' failed: " + e.getMessage());
+            }
+            // 删除后仍存在（属性标志不可删）则覆盖为抛错 stub
+            if (ScriptableObject.getProperty(scope, name) != Scriptable.NOT_FOUND) {
+                ScriptableObject.putProperty(scope, name, blockedFunction(name));
+            }
+        }
+    }
+
+    /** 抛错 stub：被禁内置函数一旦被调用立即抛安全异常 */
+    private static BaseFunction blockedFunction(String name) {
+        return new BaseFunction() {
+            @Override
+            public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
+                throw new SecurityException("custom script blocked: '" + name + "' is disabled by sandbox");
+            }
+        };
     }
 
     /**
@@ -457,7 +506,7 @@ public class CustomHttpFileHelp {
     }
 
     /** 将脚本返回对象规整成内部HTTP请求描述 */
-    private static RequestSpec toRequestSpec(Object value) {
+    static RequestSpec toRequestSpec(Object value) {
         if (!(value instanceof Scriptable)) {
             throw new IllegalArgumentException("custom script must return a request object");
         }
@@ -468,6 +517,10 @@ public class CustomHttpFileHelp {
         spec.body = stringProperty(obj, "body", null);
         spec.streamFile = optionalBooleanProperty(obj, "streamFile");
         spec.readBody = optionalBooleanProperty(obj, "readBody");
+        // httpRequest 自定义超时（秒），toRequestSpec 阶段统一收敛上限，越界值直接忽略
+        spec.connectTimeout = optionalNumberProperty(obj, "connectTimeout");
+        spec.readTimeout = optionalNumberProperty(obj, "readTimeout");
+        spec.writeTimeout = optionalNumberProperty(obj, "writeTimeout");
         var headers = ScriptableObject.getProperty(obj, "headers");
         if (headers instanceof Scriptable) {
             for (var id : ((Scriptable) headers).getIds()) {
@@ -579,6 +632,24 @@ public class CustomHttpFileHelp {
         return Context.toBoolean(value);
     }
 
+    /** 从脚本对象读取可空数值属性（秒）；非法或非正数视为未设置，超过上限时截断 */
+    private static Long optionalNumberProperty(Scriptable obj, String name) {
+        var value = ScriptableObject.getProperty(obj, name);
+        if (value == null || value == Scriptable.NOT_FOUND) {
+            return null;
+        }
+        long v;
+        try {
+            v = ((Number) Context.jsToJava(value, Long.class)).longValue();
+        } catch (Exception e) {
+            return null;
+        }
+        if (v <= 0) {
+            return null;
+        }
+        return Math.min(v, MAX_SCRIPT_TIMEOUT_SECONDS);
+    }
+
     /** 判断脚本对象是否包含指定属性 */
     private static boolean hasProperty(Scriptable obj, String name) {
         var value = ScriptableObject.getProperty(obj, name);
@@ -621,125 +692,14 @@ public class CustomHttpFileHelp {
         return ctx;
     }
 
-    /** 给JS脚本提供HTTP请求、状态存取、编码和哈希等通用工具 */
-    private static void installUtilityFunctions(Scriptable scope) {
-        // 脚本内的原始HTTP请求入口
-        ScriptableObject.putProperty(scope, "httpRequest", new BaseFunction() {
-            @Override
-            public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
-                try {
-                    var spec = args.length > 0 ? toRequestSpec(args[0]) : null;
-                    if (spec == null) {
-                        throw new IllegalArgumentException("httpRequest expects a request object");
-                    }
-                    var streamBody = Boolean.TRUE.equals(spec.streamFile) ? currentUploadBody() : null;
-                    var readBody = spec.readBody == null || spec.readBody;
-                    var response = execute(spec, streamBody, readBody);
-                    return responseToScriptObject(scope, response);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }
-        });
-        // 脚本内把文本编码成Base64
-        ScriptableObject.putProperty(scope, "base64Encode", new BaseFunction() {
-            @Override
-            public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
-                return base64EncodeText(args.length > 0 ? Context.toString(args[0]) : "");
-            }
-        });
-        // 脚本内把Base64解码回UTF-8文本
-        ScriptableObject.putProperty(scope, "base64Decode", new BaseFunction() {
-            @Override
-            public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
-                return base64DecodeText(args.length > 0 ? Context.toString(args[0]) : "");
-            }
-        });
-        // 脚本内计算任意算法的十六进制摘要
-        ScriptableObject.putProperty(scope, "hashHex", new BaseFunction() {
-            @Override
-            public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
-                var algorithm = args.length > 0 ? Context.toString(args[0]) : "MD5";
-                var value = args.length > 1 ? Context.toString(args[1]) : "";
-                return hashHex(algorithm, value);
-            }
-        });
-        // 脚本内把远端响应流直接写入当前下载目标文件
-        ScriptableObject.putProperty(scope, "httpDownload", new BaseFunction() {
-            @Override
-            public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
-                try {
-                    var spec = args.length > 0 ? toRequestSpec(args[0]) : null;
-                    if (spec == null) {
-                        throw new IllegalArgumentException("httpDownload expects a request object");
-                    }
-                    var target = currentDownloadTarget();
-                    var response = execute(spec, null, false);
-                    try {
-                        if (response.code >= 200 && response.code < 300 && response.response != null && response.response.body() != null) {
-                            var parent = target.getParentFile();
-                            if (parent != null) {
-                                parent.mkdirs();
-                            }
-                            try (var in = response.response.body().byteStream(); var fos = new FileOutputStream(target)) {
-                                copyStream(in, fos);
-                            }
-                        }
-                        return responseToScriptObject(scope, response);
-                    } finally {
-                        closeQuietly(response);
-                    }
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }
-        });
-        // 脚本内读取持久化状态
-        ScriptableObject.putProperty(scope, "stateGet", new BaseFunction() {
-            @Override
-            public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
-                var key = args.length > 0 ? Context.toString(args[0]) : "";
-                var def = args.length > 1 ? Context.toString(args[1]) : "";
-                return getScriptState(key, def);
-            }
-        });
-        // 脚本内写入持久化状态
-        ScriptableObject.putProperty(scope, "stateSet", new BaseFunction() {
-            @Override
-            public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
-                var key = args.length > 0 ? Context.toString(args[0]) : "";
-                var value = args.length > 1 ? Context.toString(args[1]) : "";
-                setScriptState(key, value);
-                return value;
-            }
-        });
-    }
-
-    /** 读取JS脚本持久化状态，比如脚本刷新后的Cookie或token；按当前脚本账号隔离存入加密存储 */
-    private static String getScriptState(String key, String def) {
-        if (key == null || key.isEmpty()) return def;
-        var accountId = scriptAccountId();
-        if (accountId.isEmpty()) return def;
-        var value = EncryptedCredStore.get(accountId, "state:" + key);
-        return value == null || value.isEmpty() ? def : value;
-    }
-
-    /** 写入JS脚本持久化状态，比如脚本刷新后的Cookie或token；按当前脚本账号隔离存入加密存储 */
-    private static void setScriptState(String key, String value) {
-        if (key == null || key.isEmpty()) return;
-        var accountId = scriptAccountId();
-        if (accountId.isEmpty()) return;
-        EncryptedCredStore.put(accountId, "state:" + key, value == null ? "" : value);
-    }
-
     /** 当前脚本账号 id，无账号上下文时为空串 */
-    private static String scriptAccountId() {
+    static String scriptAccountId() {
         var id = sScriptAccountId.get();
         return id == null ? "" : id;
     }
 
     /** 将当前上传上下文的文件流暴露给JS的 httpRequest(streamFile:true) 使用 */
-    private static RequestBody currentUploadBody() {
+    static RequestBody currentUploadBody() {
         var upload = sUploadContext.get();
         if (upload == null || upload.localFile == null) {
             throw new IllegalStateException("streamFile requested without an active upload context");
@@ -748,7 +708,7 @@ public class CustomHttpFileHelp {
     }
 
     /** 当前下载目标文件，供JS脚本里的 httpDownload 使用 */
-    private static File currentDownloadTarget() {
+    static File currentDownloadTarget() {
         var download = sDownloadContext.get();
         if (download == null || download.localFile == null) {
             throw new IllegalStateException("httpDownload requested without an active download context");
@@ -756,44 +716,30 @@ public class CustomHttpFileHelp {
         return download.localFile;
     }
 
-    /** 把文本编码成Base64 */
-    private static String base64EncodeText(String value) {
-        return Base64.getEncoder().encodeToString((value == null ? "" : value).getBytes(StandardCharsets.UTF_8));
-    }
-
-    /** 把Base64文本解码成UTF-8字符串 */
-    private static String base64DecodeText(String value) {
-        try {
-            return new String(Base64.getDecoder().decode(value == null ? "" : value), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    /** 计算任意算法的十六进制摘要文本 */
-    private static String hashHex(String algorithm, String value) {
-        var algo = algorithm == null || algorithm.isEmpty() ? "MD5" : algorithm;
-        try {
-            var digest = MessageDigest.getInstance(algo);
-            var bytes = digest.digest((value == null ? "" : value).getBytes(StandardCharsets.UTF_8));
-            var out = new StringBuilder(bytes.length * 2);
-            for (var b : bytes) {
-                out.append(String.format(Locale.ROOT, "%02x", b & 0xff));
-            }
-            return out.toString();
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
-    }
-
-    /** 将HTTP响应转换为脚本可读对象 */
-    private static Scriptable responseToScriptObject(Scriptable scope, ScriptResponse response) {
-        var obj = Context.getCurrentContext().newObject(scope);
+    /**
+     * 将HTTP响应转换为脚本可读对象（沙箱 v2）
+     * headers 保留同名响应头的全部值：单值时给字符串（兼容现有脚本），多值时给数组。
+     */
+    static Scriptable responseToScriptObject(Scriptable scope, ScriptResponse response) {
+        var cx = Context.getCurrentContext();
+        var obj = cx.newObject(scope);
         ScriptableObject.putProperty(obj, "code", response.code);
         ScriptableObject.putProperty(obj, "body", response.body == null ? "" : response.body);
-        var headers = new LinkedHashMap<String, Object>();
-        headers.putAll(response.headers);
-        ScriptableObject.putProperty(obj, "headers", toNativeObject(scope, headers));
+        var headers = cx.newObject(scope);
+        for (var entry : response.headers.entrySet()) {
+            var values = entry.getValue();
+            if (values == null || values.isEmpty()) continue;
+            if (values.size() == 1) {
+                ScriptableObject.putProperty(headers, entry.getKey(), values.get(0));
+            } else {
+                var arr = cx.newArray(scope, values.size());
+                for (var i = 0; i < values.size(); i++) {
+                    ScriptableObject.putProperty(arr, i, values.get(i));
+                }
+                ScriptableObject.putProperty(headers, entry.getKey(), arr);
+            }
+        }
+        ScriptableObject.putProperty(obj, "headers", headers);
         return obj;
     }
 
@@ -855,7 +801,7 @@ public class CustomHttpFileHelp {
     }
 
     /** 简单流拷贝，调用方负责关闭输入输出流 */
-    private static void copyStream(java.io.InputStream in, java.io.OutputStream out) throws Exception {
+    static void copyStream(java.io.InputStream in, java.io.OutputStream out) throws Exception {
         var buffer = new byte[BUFFER_SIZE];
         var len = 0;
         while ((len = in.read(buffer)) != -1) {
@@ -864,19 +810,22 @@ public class CustomHttpFileHelp {
     }
 
     /** 关闭HTTP响应，释放连接 */
-    private static void closeQuietly(ScriptResponse response) {
+    static void closeQuietly(ScriptResponse response) {
         if (response != null && response.response != null) {
             response.response.close();
         }
     }
 
     /** 脚本返回的HTTP请求描述 */
-    private static class RequestSpec {
+    static class RequestSpec {
         String method;
         String url;
         String body;
         Boolean streamFile;
         Boolean readBody;
+        Long connectTimeout;
+        Long readTimeout;
+        Long writeTimeout;
         final Map<String, String> headers = new LinkedHashMap<>();
     }
 
@@ -903,11 +852,12 @@ public class CustomHttpFileHelp {
     }
 
     /** HTTP响应的轻量包装，支持小响应缓存和大响应流式读取两种模式 */
-    private static class ScriptResponse {
+    static class ScriptResponse {
         int code;
         String body = "";
         Response response;
-        Map<String, String> headers = Map.of();
+        /** 同名响应头保留全部值（沙箱 v2） */
+        Map<String, List<String>> headers = Map.of();
     }
 
     /** 流式读取本地文件作为请求体，并在写入时回调进度 */

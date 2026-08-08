@@ -18,8 +18,8 @@
 // 上传时目录不存在会自动创建，列表或下载时目录不存在会返回空或报文件缺失
 //
 // Rhino 兼容说明
-// 手机备份进程里的 Rhino 不支持正则表达式，因此脚本里避免使用正则字面量
-// 也尽量避免较新的 JS API，保持 ES5 风格
+// 运行环境为 Rhino 1.9.x（沙箱 v2）：正则表达式（含命名捕获组、lookbehind、Unicode 模式）可用，
+// 但脚本仍需避免 Java 类访问（Java.type / 反射不可用），并保持 ES5 风格以兼容解释模式
 
 var API_BASE = 'https://personal-kd-njs.yun.139.com';
 
@@ -228,7 +228,7 @@ function parseJson(text, fallback) {
 }
 
 // 规范化路径
-// 不使用正则，兼容备份进程中的 Rhino
+// 用字符串处理而非正则，保持实现直观且与脚本风格一致
 function trimSlashes(path) {
   var value = String(path || '').split('\\').join('/');
   while (value.charAt(0) === '/') {
