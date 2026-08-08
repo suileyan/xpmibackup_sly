@@ -1,0 +1,76 @@
+name: Build Release APK
+
+# 触发：推送 v* tag（如 v0.1.0）自动构建正式版并发布 Releases；
+# workflow_dispatch 可手动触发（仅构建并上传 artifact，不发布）
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components (platform-36 + build-tools 36.0.0)
+        run: |
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" --sdk_root="$ANDROID_HOME"
+          yes | sdkmanager --licenses --sdk_root="$ANDROID_HOME" > /dev/null || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # release 签名：从 GitHub Secrets 注入。
+      # 需配置：KEYSTORE_BASE64(keystore 文件 base64)、KEYSTORE_PASSWORD、KEY_ALIAS、KEY_PASSWORD。
+      # 未配置时构建未签名 APK 并告警（无法安装，仅存档）。
+      - name: Configure release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > src/keystore.jks
+            printf 'storeFile=keystore.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > src/keystore.properties
+            echo "::notice::Release signing configured from secrets"
+          else
+            echo "::warning::KEYSTORE_BASE64 secret not set - building UNSIGNED release APK"
+          fi
+
+      - name: Build release APK
+        run: |
+          cd src
+          chmod +x gradlew
+          ./gradlew assembleRelease
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: src/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src/app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true
