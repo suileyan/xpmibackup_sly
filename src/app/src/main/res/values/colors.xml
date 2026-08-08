@@ -24,5 +24,7 @@
 
     <!-- 语义色 -->
     <color name="danger">#D93025</color>
+    <color name="success">#1E8E3E</color>
+    <color name="warning">#E37400</color>
     <color name="status_bar">#F8F9FA</color>
 </resources>

@@ -119,6 +119,14 @@ public final class ProviderRegistry {
             LogHelp.e(TAG, "cloud account not found: " + cloudAccountId);
             return null;
         }
+        return forAccount(account);
+    }
+
+    /** 按云盘账号构造 Provider（校验/测试用，每次新构造读取最新凭据，不缓存） */
+    public static CloudProvider forAccount(CloudAccount account) {
+        if (account == null) {
+            return null;
+        }
         if (CloudAccount.PROVIDER_139.equals(account.provider)) {
             return new Yun139Provider(account);
         }

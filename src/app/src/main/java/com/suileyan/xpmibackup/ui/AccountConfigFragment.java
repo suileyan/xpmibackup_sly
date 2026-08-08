@@ -14,7 +14,9 @@ import android.widget.Toast;
 
 import com.suileyan.cloud.CloudAccount;
 import com.suileyan.cloud.CloudAccountStore;
+import com.suileyan.cloud.CredentialChecker;
 import com.suileyan.cloud.ProviderRegistry;
+import com.suileyan.comm.Async;
 import com.suileyan.xpmibackup.R;
 
 /**
@@ -121,7 +123,35 @@ public class AccountConfigFragment extends Fragment {
         subText.setPadding(0, dp(2), 0, 0);
         info.addView(subText);
 
+        // 凭证状态行：异步检查后显示"有效/失效需重新登录/网络异常"（凭证预处理，NEW-H-04）
+        var statusText = new TextView(getActivity());
+        statusText.setTextSize(11f);
+        statusText.setTextColor(getResources().getColor(R.color.text_secondary));
+        statusText.setPadding(0, dp(2), 0, 0);
+        info.addView(statusText);
+
         row.addView(info);
+
+        // 右侧按钮区：失效/弱凭据时显示"重新登录"，其后为删除按钮
+        var btnArea = new LinearLayout(getActivity());
+        btnArea.setOrientation(LinearLayout.HORIZONTAL);
+        btnArea.setGravity(Gravity.CENTER_VERTICAL);
+        btnArea.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        var btnRelogin = new Button(getActivity());
+        btnRelogin.setText(R.string.relogin_account);
+        btnRelogin.setTextSize(11f);
+        btnRelogin.setAllCaps(false);
+        btnRelogin.setTextColor(getResources().getColor(R.color.primary_text_on));
+        btnRelogin.setBackgroundResource(R.drawable.bg_button_primary);
+        btnRelogin.setPadding(dp(12), 0, dp(12), 0);
+        var reloginLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34));
+        reloginLp.setMarginEnd(dp(8));
+        btnRelogin.setLayoutParams(reloginLp);
+        // 初始隐藏：仅在凭证失效/建议重新登录时显示
+        btnRelogin.setVisibility(View.GONE);
+        btnRelogin.setOnClickListener(v -> openLoginFor(account.provider));
+        btnArea.addView(btnRelogin);
 
         var btnDelete = new Button(getActivity());
         btnDelete.setText(R.string.delete_account);
@@ -132,9 +162,63 @@ public class AccountConfigFragment extends Fragment {
         btnDelete.setPadding(dp(12), 0, dp(12), 0);
         btnDelete.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)));
         btnDelete.setOnClickListener(v -> deleteAccount(account));
-        row.addView(btnDelete);
+        btnArea.addView(btnDelete);
+
+        row.addView(btnArea);
+
+        // 异步校验凭证状态（不阻塞列表渲染；行被移除后忽略结果）
+        startCredentialCheck(account, statusText, btnRelogin);
 
         return row;
+    }
+
+    /**
+     * 异步检查账号凭证状态并更新状态行
+     * 检查在共享守护线程池执行（Async），结果回主线程更新文本/颜色与"重新登录"按钮
+     */
+    private void startCredentialCheck(CloudAccount account, TextView statusText, Button btnRelogin) {
+        statusText.setText(R.string.cred_checking);
+        statusText.setTextColor(getResources().getColor(R.color.text_secondary));
+        Async.run("cred-check-" + account.id, () -> {
+            var status = CredentialChecker.check(account);
+            if (getActivity() == null) return;
+            getActivity().runOnUiThread(() -> {
+                // 行可能已被移除/重建（Fragment 重绘），通过 tag 兜底防止更新到孤儿 view
+                if (statusText.getParent() == null) return;
+                applyCredentialStatus(status, statusText, btnRelogin);
+            });
+        });
+    }
+
+    /** 按凭证状态刷新状态行文本/颜色，并决定是否显示"重新登录"按钮 */
+    private void applyCredentialStatus(CredentialChecker.Status status, TextView statusText, Button btnRelogin) {
+        switch (status) {
+            case VALID:
+                statusText.setText(R.string.cred_valid);
+                statusText.setTextColor(getResources().getColor(R.color.success));
+                btnRelogin.setVisibility(View.GONE);
+                break;
+            case WEAK:
+                statusText.setText(R.string.cred_weak);
+                statusText.setTextColor(getResources().getColor(R.color.warning));
+                btnRelogin.setVisibility(View.VISIBLE);
+                break;
+            case INVALID:
+                statusText.setText(R.string.cred_invalid);
+                statusText.setTextColor(getResources().getColor(R.color.danger));
+                btnRelogin.setVisibility(View.VISIBLE);
+                break;
+            case ERROR:
+                statusText.setText(R.string.cred_error);
+                statusText.setTextColor(getResources().getColor(R.color.text_secondary));
+                btnRelogin.setVisibility(View.GONE);
+                break;
+            default: // CHECKING
+                statusText.setText(R.string.cred_checking);
+                statusText.setTextColor(getResources().getColor(R.color.text_secondary));
+                btnRelogin.setVisibility(View.GONE);
+                break;
+        }
     }
 
     /**
@@ -158,6 +242,28 @@ public class AccountConfigFragment extends Fragment {
     }
 
     /**
+     * 凭证失效时直接打开指定网盘登录页重新登录（跳过网盘选择）
+     * @param provider 网盘类型（WebViewLoginFragment.PROVIDER_*）
+     */
+    private void openLoginFor(String provider) {
+        var login = new WebViewLoginFragment();
+        var args = new Bundle();
+        args.putString(WebViewLoginFragment.ARG_PROVIDER, provider);
+        login.setArguments(args);
+        var ft = getFragmentManager().beginTransaction();
+        var overlay = getActivity() != null ? getActivity().findViewById(R.id.overlay_container) : null;
+        if (overlay != null) {
+            overlay.setTranslationX(0f);
+            overlay.setVisibility(View.VISIBLE);
+        }
+        ft.setCustomAnimations(R.animator.slide_in_right, R.animator.no_anim,
+                R.animator.no_anim, R.animator.no_anim);
+        ft.add(R.id.overlay_container, login);
+        ft.addToBackStack("cloud-login");
+        ft.commit();
+    }
+
+    /**
      * 删除云盘账号（同时清理加密凭据）
      */
     private void deleteAccount(CloudAccount account) {
@@ -167,6 +273,7 @@ public class AccountConfigFragment extends Fragment {
             ProviderRegistry.clearCloudTarget();
         }
         ProviderRegistry.invalidateAll();
+        CredentialChecker.invalidate(account.id);
         Toast.makeText(getActivity(), R.string.toast_account_removed, Toast.LENGTH_SHORT).show();
         refreshList();
     }

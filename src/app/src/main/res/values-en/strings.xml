@@ -143,4 +143,10 @@
     <string name="toast_backup_max_invalid">Max backup count must be a non-negative integer.</string>
     <string name="toast_connection_success">Connection succeeded. Configuration saved.</string>
     <string name="toast_connection_failed">Configuration saved, but the connection failed. Please check the settings.</string>
+    <string name="relogin_account">Re-login</string>
+    <string name="cred_checking">Checking credentials...</string>
+    <string name="cred_valid">Credentials valid</string>
+    <string name="cred_weak">Connected, but no refresh token. Re-login recommended.</string>
+    <string name="cred_invalid">Credentials expired. Re-login required.</string>
+    <string name="cred_error">Cannot verify (network/server error)</string>
 </resources>

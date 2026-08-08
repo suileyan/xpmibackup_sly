@@ -504,6 +504,8 @@ public class WebViewLoginFragment extends Fragment {
     }
 
     private void finishSave() {
+        // 失效凭证检查缓存，返回账号页后立即重新校验（避免显示旧失效状态）
+        com.suileyan.cloud.CredentialChecker.invalidateAll();
         Toast.makeText(getActivity(), R.string.toast_cloud_account_saved, Toast.LENGTH_SHORT).show();
         var fm = getFragmentManager();
         if (fm != null && fm.getBackStackEntryCount() > 0) {
