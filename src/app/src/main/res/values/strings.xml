@@ -138,11 +138,15 @@
     <string name="cloud_provider_139_hint">应用内网页登录</string>
     <string name="cloud_provider_guangya">光鸭云盘</string>
     <string name="cloud_provider_guangya_hint">应用内网页登录</string>
+    <string name="cloud_provider_quark">夸克云盘</string>
+    <string name="cloud_provider_quark_hint">应用内网页登录</string>
+    <string name="title_webview_login_quark">登录夸克云盘</string>
     <string name="title_webview_login">登录 139 云盘</string>
     <string name="title_webview_login_guangya">登录光鸭云盘</string>
     <string name="webview_login_done">完成</string>
     <string name="webview_login_tip">请在网页中登录账号，完成后点击右上角「完成」</string>
     <string name="toast_webview_no_auth">未检测到登录信息，请完成登录后重试</string>
+    <string name="toast_quark_login_incomplete">登录未完成或会话无效，请确认已进入夸克网盘界面后再点完成</string>
     <string name="relogin_account">重新登录</string>
     <string name="cred_checking">正在检查凭证…</string>
     <string name="cred_valid">✓ 凭证有效</string>

@@ -964,7 +964,25 @@ public class AIDLHook {
         var remoteDir = extractRemoteDir(remotePath);
         var fileName = extractFileName(remotePath);
         var localFile = LocalBackupFileHelp.resolveUploadFile(pfd, aidlPath);
-        var copiedTempFile = localFile == null ? LocalBackupFileHelp.createUploadTempFile(aidlPath, fileName) : null;
+        var copiedTempFile = (java.io.File) null;
+        if (localFile != null && localFile.exists()) {
+            // 复制到独立临时副本再上传：备份流程可能在上传期间删除源文件
+            // （夸克需先算 md5/sha1 + 分片，窗口长，源文件 ENOENT 频发）。复制失败则回退原文件
+            var safeCopy = LocalBackupFileHelp.createUploadTempFile(aidlPath, fileName);
+            try {
+                safeCopy.getParentFile().mkdirs();
+                try (var is = new FileInputStream(localFile); var os = new FileOutputStream(safeCopy)) {
+                    copyStream(is, os);
+                }
+                localFile = safeCopy;
+                copiedTempFile = safeCopy;
+            } catch (Exception e) {
+                LogHelp.w(TAG, "copy upload source failed, fallback to original: " + localFile.getAbsolutePath(), e);
+            }
+        } else {
+            localFile = null;
+            copiedTempFile = LocalBackupFileHelp.createUploadTempFile(aidlPath, fileName);
+        }
         try {
             BackupHook.recordActiveBackupDir(remoteDir);
             notifyProgressStart(listener, taskId);

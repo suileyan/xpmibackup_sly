@@ -98,6 +98,9 @@
     <string name="cloud_provider_guangya_hint">In-app web login</string>
     <string name="title_webview_login">Log in to 139 Cloud Drive</string>
     <string name="title_webview_login_guangya">Log in to Guangya Cloud Drive</string>
+    <string name="cloud_provider_quark">Quark Drive</string>
+    <string name="cloud_provider_quark_hint">In-app web login</string>
+    <string name="title_webview_login_quark">Log in to Quark Drive</string>
     <string name="webview_login_done">Done</string>
     <string name="webview_login_tip">Log in on the page, then tap "Done" in the top-right corner.</string>
     <string name="toast_webview_no_auth">No login info detected. Please finish login and try again.</string>
@@ -144,6 +147,7 @@
     <string name="toast_connection_success">Connection succeeded. Configuration saved.</string>
     <string name="toast_connection_failed">Configuration saved, but the connection failed. Please check the settings.</string>
     <string name="relogin_account">Re-login</string>
+    <string name="toast_quark_login_incomplete">Login incomplete or session invalid. Please make sure you have entered the Quark Drive page, then tap Done.</string>
     <string name="cred_checking">Checking credentials...</string>
     <string name="cred_valid">Credentials valid</string>
     <string name="cred_weak">Connected, but no refresh token. Re-login recommended.</string>

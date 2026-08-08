@@ -11,6 +11,7 @@ public class CloudAccount {
     /** 支持的云盘提供方 */
     public static final String PROVIDER_139 = "139";
     public static final String PROVIDER_GUANGYA = "guangya";
+    public static final String PROVIDER_QUARK = "quark";
 
     public final String id;
     public final String provider;

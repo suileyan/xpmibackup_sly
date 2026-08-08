@@ -33,6 +33,7 @@ import okhttp3.Request;
  * 云盘 WebView 登录页（泛化，支持多网盘）
  * 139 云盘：加载 yun.139.com，捕获请求头 Authorization: Basic（personal 节点）保存
  * 光鸭云盘：加载 guangyapan.com，捕获 Authorization: Bearer + localStorage 扫描提取 access/refresh token
+ * 夸克云盘：加载 pan.quark.cn，登录后捕获 Cookie（含 __puus 会话凭证）保存
  * 用户完成网页登录后点击「完成」自动提取凭据并保存
  */
 public class WebViewLoginFragment extends Fragment {
@@ -42,12 +43,15 @@ public class WebViewLoginFragment extends Fragment {
     /** 网盘类型常量 */
     public static final String PROVIDER_139 = "139";
     public static final String PROVIDER_GUANGYA = "guangya";
+    public static final String PROVIDER_QUARK = "quark";
     public static final String ARG_PROVIDER = "provider";
 
     /** 139 云盘登录页 */
     private static final String URL_139 = "https://yun.139.com";
     /** 光鸭云盘登录页 */
     private static final String URL_GUANGYA = "https://www.guangyapan.com/";
+    /** 夸克云盘登录页 */
+    private static final String URL_QUARK = "https://pan.quark.cn/";
 
     /** 桌面版 User-Agent（电脑模式） */
     private static final String DESKTOP_UA =
@@ -131,11 +135,16 @@ public class WebViewLoginFragment extends Fragment {
         webView = view.findViewById(R.id.webview_login);
         btnDone = view.findViewById(R.id.btn_webview_done);
 
-        // 标题按网盘类型动态显示（139 / 光鸭）
+        // 标题按网盘类型动态显示（139 / 光鸭 / 夸克）
         var tvTitle = (android.widget.TextView) view.findViewById(R.id.tv_webview_title);
         if (tvTitle != null) {
-            tvTitle.setText(PROVIDER_GUANGYA.equals(provider)
-                    ? R.string.title_webview_login_guangya : R.string.title_webview_login);
+            if (PROVIDER_GUANGYA.equals(provider)) {
+                tvTitle.setText(R.string.title_webview_login_guangya);
+            } else if (PROVIDER_QUARK.equals(provider)) {
+                tvTitle.setText(R.string.title_webview_login_quark);
+            } else {
+                tvTitle.setText(R.string.title_webview_login);
+            }
         }
 
         var settings = webView.getSettings();
@@ -176,6 +185,14 @@ public class WebViewLoginFragment extends Fragment {
                     // 光鸭主文档 HTML 预注入桌面脚本（赶在 SPA defer 脚本执行前完成设备伪装）
                     if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
                             && isGuangyaHost(request.getUrl().getHost())
+                            && isHtmlPage(request.getUrl().toString())) {
+                        var injected = fetchAndInjectDesktop(request.getUrl().toString());
+                        if (injected != null) return injected;
+                    }
+                } else if (PROVIDER_QUARK.equals(provider)) {
+                    // 夸克登录页同为 SPA，同样预注入桌面模式
+                    if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
+                            && isQuarkHost(request.getUrl().getHost())
                             && isHtmlPage(request.getUrl().toString())) {
                         var injected = fetchAndInjectDesktop(request.getUrl().toString());
                         if (injected != null) return injected;
@@ -230,6 +247,18 @@ public class WebViewLoginFragment extends Fragment {
                             }
                         }
                     });
+                } else if (PROVIDER_QUARK.equals(provider)) {
+                    // 夸克：登录态在 Cookie（可能跨多个子域），点「完成」时合并读取保存
+                    var ck = captureQuarkCookie();
+                    var names = new java.util.ArrayList<String>();
+                    if (ck != null) {
+                        for (var pair : ck.split(";")) {
+                            var t = pair.trim();
+                            if (!t.isEmpty()) names.add(t.split("=", 2)[0]);
+                        }
+                    }
+                    LogHelp.d(TAG, "夸克登录页 Cookie 就绪: len=" + (ck != null ? ck.length() : 0)
+                            + " keys=" + String.join(",", names));
                 } else {
                     view.evaluateJavascript(EXTRACT_JS_139, value -> {
                         if (value != null && value.toLowerCase().contains("basic")) {
@@ -247,7 +276,8 @@ public class WebViewLoginFragment extends Fragment {
             }
         });
 
-        webView.loadUrl(PROVIDER_GUANGYA.equals(provider) ? URL_GUANGYA : URL_139);
+        webView.loadUrl(PROVIDER_GUANGYA.equals(provider) ? URL_GUANGYA
+                : PROVIDER_QUARK.equals(provider) ? URL_QUARK : URL_139);
 
         // 返回键：优先让 WebView 后退
         view.setFocusableInTouchMode(true);
@@ -315,6 +345,13 @@ public class WebViewLoginFragment extends Fragment {
         if (host == null) return false;
         var h = host.toLowerCase(java.util.Locale.ROOT);
         return h.equals("guangyapan.com") || h.endsWith(".guangyapan.com");
+    }
+
+    /** 严格判断主机名是否属于夸克网盘主站（pan.quark.cn） */
+    private static boolean isQuarkHost(String host) {
+        if (host == null) return false;
+        var h = host.toLowerCase(java.util.Locale.ROOT);
+        return h.equals("pan.quark.cn") || h.equals("drive.quark.cn") || h.equals("drive-pc.quark.cn");
     }
 
     /** 注入桌面模式脚本（覆写 navigator.userAgent/UserAgentData + 强制桌面 viewport） */
@@ -390,8 +427,110 @@ public class WebViewLoginFragment extends Fragment {
     private void onDone() {
         if (PROVIDER_GUANGYA.equals(provider)) {
             onDoneGuangya();
+        } else if (PROVIDER_QUARK.equals(provider)) {
+            onDoneQuark();
         } else {
             onDone139();
+        }
+    }
+
+    /**
+     * 夸克：合并读取登录页相关子域的 Cookie（登录态 cookie 可能在 pan/drive/drive-pc/passport 域，
+     * 且新版本登录态已不依赖 __puus），点「完成」后台验证通过后保存
+     * 幂等复用已存在夸克账号 id
+     */
+    private void onDoneQuark() {
+        var ck = captureQuarkCookie();
+        if (ck == null || ck.isEmpty()) {
+            Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+            return;
+        }
+        LogHelp.i(TAG, "夸克 Cookie 捕获: len=" + ck.length());
+        btnDone.setEnabled(false);
+        btnDone.setText(R.string.testing_connection);
+        var id = "quark_" + System.currentTimeMillis();
+        // 幂等：复用已存在夸克账号 id，避免重复保存出现多个账号
+        var existing = CloudAccountStore.list().stream()
+                .filter(a -> CloudAccount.PROVIDER_QUARK.equals(a.provider))
+                .findFirst().orElse(null);
+        if (existing != null) id = existing.id;
+        var accountId = id;
+        new Thread(() -> {
+            try {
+                // 临时保存用于验证，成功后保留；失败则回滚
+                EncryptedCredStore.put(accountId, "cookie", ck);
+                var provider = com.suileyan.cloud.ProviderRegistry.forAccount(
+                        new CloudAccount(accountId, CloudAccount.PROVIDER_QUARK, "", "", System.currentTimeMillis()));
+                var ok = provider != null && provider.testConnection();
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(() -> {
+                    btnDone.setEnabled(true);
+                    btnDone.setText(R.string.webview_login_done);
+                    if (ok) {
+                        saveAccountQuark(accountId, ck);
+                    } else {
+                        // 验证失败：打印捕获的 cookie 键名便于排查，并提示登录可能未完成
+                        var names = new java.util.ArrayList<String>();
+                        for (var pair : ck.split(";")) {
+                            var t = pair.trim();
+                            if (!t.isEmpty()) names.add(t.split("=", 2)[0]);
+                        }
+                        LogHelp.w(TAG, "夸克 Cookie 验证失败，捕获键名: " + String.join(",", names));
+                        EncryptedCredStore.removeAccount(accountId);
+                        Toast.makeText(getActivity(), R.string.toast_quark_login_incomplete, Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                LogHelp.e(TAG, "夸克 Cookie 验证失败", e);
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        btnDone.setEnabled(true);
+                        btnDone.setText(R.string.webview_login_done);
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    });
+                }
+            }
+        }, "XpMiBackup-quark-validate").start();
+    }
+
+    /**
+     * 合并夸克登录相关子域的 Cookie（按 cookie 名去重，跨域同名取首个）
+     * 夸克登录态可能落在 pan.quark.cn / drive.quark.cn / drive-pc.quark.cn / passport.quark.cn
+     */
+    private String captureQuarkCookie() {
+        var sb = new StringBuilder();
+        var seen = new java.util.HashSet<String>();
+        for (var base : new String[]{
+                "https://pan.quark.cn/",
+                "https://drive.quark.cn/",
+                "https://drive-pc.quark.cn/",
+                "https://passport.quark.cn/"}) {
+            var ck = CookieManager.getInstance().getCookie(base);
+            if (ck == null) continue;
+            for (var pair : ck.split(";")) {
+                var p = pair.trim();
+                if (p.isEmpty()) continue;
+                var name = p.split("=", 2)[0];
+                if (seen.add(name)) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(p);
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 保存夸克账号（Cookie 已在后台验证通过） */
+    private void saveAccountQuark(String id, String cookie) {
+        try {
+            CloudAccountStore.add(new CloudAccount(id, CloudAccount.PROVIDER_QUARK, "",
+                    getString(R.string.cloud_provider_quark), System.currentTimeMillis()));
+            // 校验用的临时凭据保留为正式凭据
+            LogHelp.i(TAG, "夸克账号已保存: " + id + " cookie_len=" + cookie.length());
+            finishSave();
+        } catch (Exception e) {
+            LogHelp.e(TAG, "save 夸克 account failed", e);
+            Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
         }
     }
 

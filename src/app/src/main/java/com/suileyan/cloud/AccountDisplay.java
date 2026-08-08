@@ -73,6 +73,7 @@ public final class AccountDisplay {
     public static String providerLabel(String provider) {
         if (CloudAccount.PROVIDER_139.equals(provider)) return "139 云盘";
         if (CloudAccount.PROVIDER_GUANGYA.equals(provider)) return "光鸭云盘";
+        if (CloudAccount.PROVIDER_QUARK.equals(provider)) return "夸克云盘";
         return provider == null ? "" : provider;
     }
 

@@ -8,9 +8,9 @@
 
 ![Upstream](https://img.shields.io/badge/Upstream-XPoser__MiBackup-blue)
 
-本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）与光鸭云盘内置 Provider、OAuth2 Token 自动刷新等能力。
+本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）、光鸭云盘与夸克云盘内置 Provider、OAuth2 Token 自动刷新等能力。
 
-通过 Xposed 模块虚拟小米智能存储设备，将小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘，实现备份与恢复数据的云端存储。
+通过 Xposed 模块虚拟小米智能存储设备，将小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘、夸克云盘，实现备份与恢复数据的云端存储。
 
 ## 原理
 
@@ -20,7 +20,7 @@
 小米备份 App
   -> 查询智能存储设备：返回虚拟设备
   -> 连接 DFS 服务：模拟在线和已连接
-  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭
+  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭 / 夸克
   -> DFS AIDL 下载：从对应云端读取
   -> 进度与完成回调：回传给小米备份原流程
 ```
@@ -31,11 +31,11 @@
 
 - 在系统设置中注入「云备份助手」配置入口
 - 拦截 DFS 连接，模拟小米智能存储设备在线状态
-- 支持五种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘
-- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭）可并存，按需切换备份目标
+- 支持六种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘
+- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克）可并存，按需切换备份目标
 - 凭据加密存储：密码、Token、Cookie 经 AES-GCM 加密落盘，按账号隔离
-- 网盘 Token 自动刷新：光鸭 OAuth2 refresh_token 自动轮换，401 自动重试
-- 大文件在 Cloud 层统一切片上传，五种协议共用同一套切片逻辑
+- 网盘 Token 自动刷新：光鸭 OAuth2 refresh_token 自动轮换；夸克 __puus 会话自动续期，401 自动重试
+- 大文件在 Cloud 层统一切片上传，六种协议共用同一套切片逻辑
 - 自动清理超出数量限制的旧备份
 - 顶部「备份」按钮点击进入智能存储备份页，长按进入备份升级页
 
@@ -75,7 +75,8 @@
 │  NAS 方案     │  云盘账号              │  自定义脚本          │
 │  SmbProvider  │  Yun139Provider        │  ScriptProvider     │
 │  WebdavProvider│ GuangyaProvider       │  (Rhino JS 沙箱 v2) │
-│  (继承基类)   │  (继承基类)           │  (继承基类)         │
+│  (继承基类)   │  QuarkProvider        │  (继承基类)         │
+│               │  (继承基类)           │                     │
 └───────────────┴───────────────────────┴─────────────────────┘
 ```
 
@@ -106,7 +107,7 @@
 
 `ProviderRegistry.active()` 按以下优先级返回当前备份目标的 Provider：
 
-1. **云盘备份目标**（`backup_target.json` 中 `mode=cloud`）：按云盘账号 id 构造 `Yun139Provider` / `GuangyaProvider`
+1. **云盘备份目标**（`backup_target.json` 中 `mode=cloud`）：按云盘账号 id 构造 `Yun139Provider` / `GuangyaProvider` / `QuarkProvider`
 2. **NAS 激活方案**（`profiles.json` 中 `activeId`）：按方案 type 构造 `SmbProvider` / `WebdavProvider` / `ScriptProvider`
 
 NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓存**（凭据可能因重新登录变化，每次重新构造读取最新凭据）。
@@ -145,6 +146,7 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 | 自定义脚本  | 脚本内自管理                       | 设置页粘贴 JS       | 脚本 `stateGet/stateSet` 持久化 | 脚本自行处理                |
 | 139 云盘 | Authorization（Basic）         | WebView 网页登录捕获 | 不支持（Cookie 型）              | 引导重新登录                |
 | 光鸭云盘   | access_token + refresh_token | WebView 网页登录捕获 | OAuth2 refresh_token 自动轮换  | refresh_token 失效则引导重登 |
+| 夸克云盘   | Cookie（含 __puus 会话）       | WebView 网页登录捕获 | __puus 响应 Set-Cookie 自动续期 | 会话失效则引导重新登录        |
 
 ### 光鸭云盘 OAuth2 刷新
 
@@ -154,6 +156,16 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 - `refresh_token` 为单次使用（每次刷新返回新的 refresh_token），刷新过程加 `REFRESH_LOCK` 串行化，避免多线程并发刷新导致 refresh_token 轮换冲突使账号锁定
 - 刷新成功后新 access_token / refresh_token 立即写回 `EncryptedCredStore`
 - refresh_token 也失效时抛出 `AUTH_EXPIRED`，由 `CloudFileHelp` 回调通知 UI 引导重新登录
+
+### 夸克云盘 Cookie 会话与 OSS 上传
+
+夸克网盘无公开 OAuth，凭据为网页登录后的完整 Cookie（含 `__puus` 会话凭证），API 请求把整体 Cookie 作为认证：
+
+- **登录**：WebView 加载 `pan.quark.cn` 完成网页登录，捕获 Cookie 时合并 `pan / drive / drive-pc / passport` 四个子域（登录态可能落在任一域），后台 `GET /file/sort` 验证通过后保存；未完成登录会明确提示
+- **会话续期**：`__puus` 有效期约 3 小时。每次 API 响应解析 `Set-Cookie` 中的新 `__puus` 并实时合并回加密存储；401 时自动用「剥离 `__puus` 的 Cookie」请求 `/config` 让服务端重新下发会话凭证后重试一次
+- **上传（OSS 五步）**：`file/upload/pre` 预上传 → `file/update/hash` 上报 md5/sha1（可秒传）→ `file/upload/auth` 换取分片授权 → OSS `PUT` 分片直传（分片大小取 pre 响应下发的 `part_size`）→ `file/upload/auth` 换合并授权 + OSS `CompleteMultipartUpload` → `file/upload/finish` 确认
+- **签名要点**：OSS 签名由服务端按 `auth_meta` 签发，请求头必须与实际发送完全一致（Content-Type 需含 `; charset=utf-8` 等细节），否则返回 `403 SignatureDoesNotMatch`
+- **列表 / 下载**：`GET /file/sort` 分页列目录；`POST /file/download` 换取直链后流式下载（带 Cookie/Referer/UA）
 
 ### 139 云盘签名与路由
 
@@ -234,7 +246,7 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 | 字段         | 说明                     |
 | ---------- | ---------------------- |
 | `id`       | 账号唯一标识                 |
-| `provider` | 网盘类型：`139` 或 `guangya` |
+| `provider` | 网盘类型：`139`、`guangya` 或 `quark` |
 | `account`  | 登录账号（139 为手机号）         |
 | `name`     | 显示名称                   |
 
@@ -265,7 +277,7 @@ app/src/main/java/com/suileyan/
     CloudProvider.java            统一接口
     provider/AbstractCloudProvider  Provider 公共基类（Profile + ThreadLocal 凭据注入）
     CloudProvider 实现：SmbProvider / WebdavProvider / ScriptProvider
-                      Yun139Provider / GuangyaProvider  (provider/)
+                      Yun139Provider / GuangyaProvider / QuarkProvider  (provider/)
     ProviderRegistry.java         Provider 注册表与活跃目标分发
     ProfileStore / Profile        NAS 方案持久化与模型
     CloudAccountStore / CloudAccount  云盘账号持久化与模型
@@ -299,7 +311,7 @@ app/src/main/java/com/suileyan/
 | -------------------- | ------------------------------------------ |
 | `SettingsHook`       | 在设置 App 中注入配置入口，展示虚拟智能存储设备                 |
 | `AIDLHook`           | 模拟 DFS 服务连接，拦截上传、下载、目录查询，分发到 CloudFileHelp |
-| `CloudFileHelp`      | 统一分发五种通道，处理跨协议切片与 AUTH_EXPIRED 重试          |
+| `CloudFileHelp`      | 统一分发六种通道，处理跨协议切片与 AUTH_EXPIRED 重试          |
 | `BackupHook`         | 修正备份 App 页面、通知、进度焦点和取消清理                   |
 | `AutoBackupHook`     | 接入备份 App 原生自动备份设置和调度链路                     |
 | `ProviderRegistry`   | 按备份目标（云盘账号优先，其次激活方案）取 Provider 实例          |
@@ -324,7 +336,7 @@ gradlew assembleDebug
 | ------------------------------------------ | --------------------------- |
 | [Xposed API](https://api.xposed.info/)     | 框架 Hook 能力                  |
 | [smbj](https://github.com/hierynomus/smbj) | SMB/CIFS 协议                 |
-| [OkHttp](https://square.github.io/okhttp/) | HTTP 客户端（WebDAV / 139 / 光鸭） |
+| [OkHttp](https://square.github.io/okhttp/) | HTTP 客户端（WebDAV / 139 / 光鸭 / 夸克） |
 | [Rhino](https://github.com/mozilla/rhino)  | 自定义 HTTP 脚本 JS 运行时          |
 
 ## 安全说明
