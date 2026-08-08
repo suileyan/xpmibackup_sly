@@ -41,7 +41,7 @@
 
 ## 环境要求
 
-- zndroid 9.0+（minSdk 28）
+- Android 9.0+（minSdk 28）
 - 已安装 Xposed 框架（LSPatch / LSPosed / EdXposed 等）
 - 支持的 Xposed 作用域：`com.android.settings`、`com.miui.backup`
 
@@ -67,13 +67,15 @@
 ┌───────────────────────────▼─────────────────────────────────┐
 │  Provider 抽象层 (com.suileyan.cloud)                        │
 │  CloudProvider 接口 + ProviderRegistry 注册表                │
+│  AbstractCloudProvider 基类（Profile + ThreadLocal 凭据注入）│
 │  ProgressCallback / CloudException / RetryPolicy             │
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────┬───────────┴───────────┬─────────────────────┐
 │  NAS 方案     │  云盘账号              │  自定义脚本          │
 │  SmbProvider  │  Yun139Provider        │  ScriptProvider     │
-│  WebdavProvider│ GuangyaProvider       │  (Rhino JS 运行时)  │
+│  WebdavProvider│ GuangyaProvider       │  (Rhino JS 沙箱 v2) │
+│  (继承基类)   │  (继承基类)           │  (继承基类)         │
 └───────────────┴───────────────────────┴─────────────────────┘
 ```
 
@@ -87,6 +89,18 @@
 | `com.miui.backup`      | 拦截 DFS AIDL、执行备份 / 恢复文件传输 | AIDLHook、BackupHook、AutoBackupHook |
 
 由于 Android Keystore 密钥按进程 UID 隔离无法跨进程共享，凭据加密存储（见下文）采用「固定种子 + 随机文件盐 + PBKDF2 派生」方案，使两个进程读同一文件得到同一密钥。
+
+> **关于固定种子（KEY_SEED）的架构妥协**
+>
+> `EncryptedCredStore` 中的 `KEY_SEED` 是硬编码在 APK 中的常量（`"xp-mibackup-credential-v1"`），用于派生主密钥：
+> - 无盐场景：`SHA-256(KEY_SEED)` 直接作为 AES-GCM 密钥
+> - 有盐场景：`PBKDF2(KEY_SEED, salt, 20000)` 派生密钥（salt 随机生成并随 creds.json 持久化）
+>
+> **已知风险**：反编译 APK 可获取 `KEY_SEED`，若同时拿到设备上的 `creds.json`（含 salt + 密文），即可重建密钥解密所有凭据。
+>
+> **为何不使用 Android Keystore**：Keystore 密钥按 UID 隔离，`com.android.settings`（UID 1000）创建的密钥无法被 `com.miui.backup`（不同 UID）使用，而本模块的两个进程必须读同一份凭据文件。在跨进程共享密钥这一硬约束下，固定种子是当前唯一可行的方案。
+>
+> **缓解措施**：`creds.json` 存放于应用私有目录，正常情况下其他应用无法直接读取；root 设备除外（root 用户可读取任意应用数据，这是 root 环境的固有风险，非本模块可解决）。
 
 ### 备份目标分发
 
@@ -249,20 +263,23 @@ DFS 虚拟路径中的 `.AllBackup`、`.AppBackup` 等片段不会写入云端�
 app/src/main/java/com/suileyan/
   cloud/                          云端抽象与账号层
     CloudProvider.java            统一接口
+    provider/AbstractCloudProvider  Provider 公共基类（Profile + ThreadLocal 凭据注入）
     CloudProvider 实现：SmbProvider / WebdavProvider / ScriptProvider
                       Yun139Provider / GuangyaProvider  (provider/)
     ProviderRegistry.java         Provider 注册表与活跃目标分发
     ProfileStore / Profile        NAS 方案持久化与模型
     CloudAccountStore / CloudAccount  云盘账号持久化与模型
     BackupTarget                  跨进程备份目标持久化
-    EncryptedCredStore            凭据加密存储（AES-GCM + PBKDF2）
+    EncryptedCredStore            凭据加密存储（AES-GCM + PBKDF2，固定种子见架构妥协说明）
     RetryPolicy / CloudException  重试策略与统一异常
     ProgressCallback / ListenerProgressCallback  进度回调
     login/Yun139Login             139 登录与签名算法
   comm/                           文件操作门面与配置层
     CloudFileHelp                 统一入口 + 切片 + AUTH_EXPIRED 重试
     SmbFileHelp / WebdavFileHelp  协议实现
-    CustomHttpFileHelp            自定义 HTTP 脚本（Rhino）实现
+    CustomHttpFileHelp            自定义 HTTP 脚本入口（Rhino 沙箱 v2 + ClassShutter）
+    ScriptFunctions               沙箱宿主函数库（29 个：加密/HTTP/文件/console/工具）
+    ScriptWatchdog                沙箱指令计数超时保护（ContextFactory 30s deadline）
     ConfigHelp                    全局配置读写
     Async                         共享守护线程池
     AtomicFile                    原子文件写入
