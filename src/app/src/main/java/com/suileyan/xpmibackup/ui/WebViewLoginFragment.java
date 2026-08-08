@@ -26,6 +26,9 @@ import com.suileyan.xpmibackup.R;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+
 /**
  * 云盘 WebView 登录页（泛化，支持多网盘）
  * 139 云盘：加载 yun.139.com，捕获请求头 Authorization: Basic（personal 节点）保存
@@ -50,6 +53,39 @@ public class WebViewLoginFragment extends Fragment {
     private static final String DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+    /**
+     * 桌面模式核心脚本（HTML 预注入 + 兜底注入复用同一段）：
+     * 1) 覆写 navigator.userAgent / appVersion / platform / maxTouchPoints——堵住旧式 UA 检测
+     * 2) 覆写 navigator.userAgentData（Client Hints）mobile=false/platform=Windows——
+     *    现代站点（光鸭等 SPA）改用 userAgentData 判断设备，旧实现只改 userAgent 导致仍按移动渲染
+     * 3) 强制 viewport width=1280 且允许缩放——首帧即桌面宽布局
+     * 4) MutationObserver 盯防 SPA 路由重写 viewport，改回桌面
+     */
+    private static final String DESKTOP_FIX_JS =
+            "(function(){"
+            + "var UA='" + DESKTOP_UA + "';"
+            + "function def(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v;},configurable:true});}catch(e){}}"
+            + "def(navigator,'userAgent',UA);"
+            + "def(navigator,'appVersion',UA.replace('Mozilla/',''));"
+            + "def(navigator,'platform','Win32');"
+            + "def(navigator,'maxTouchPoints',0);"
+            + "try{Object.defineProperty(navigator,'userAgentData',{get:function(){"
+            + "var b=[{brand:'Chromium',version:'131'},{brand:'Not_A Brand',version:'24'},{brand:'Google Chrome',version:'131'}];"
+            + "return {mobile:false,platform:'Windows',platformVersion:'15.0.0',architecture:'x86',bitness:'64',brands:b,uaFullVersion:'131.0.0.0',"
+            + "getHighEntropyValues:function(k){return Promise.resolve({mobile:false,platform:'Windows',platformVersion:'15.0.0',architecture:'x86',bitness:'64',brands:b});},"
+            + "toJSON:function(){return {brands:b,mobile:false,platform:'Windows'};}};"
+            + "},configurable:true});}catch(e){}"
+            + "function forceViewport(){"
+            + "var m=document.querySelector('meta[name=viewport]');"
+            + "if(!m){m=document.createElement('meta');m.name='viewport';document.head.appendChild(m);}"
+            + "var c='width=1280, initial-scale=1, user-scalable=yes';"
+            + "if(m.getAttribute('content')!==c)m.setAttribute('content',c);}"
+            + "if(document.head)forceViewport();"
+            + "if(window.MutationObserver){try{"
+            + "new MutationObserver(forceViewport).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['content']});"
+            + "}catch(e){}}"
+            + "})()";
+
     /** 139 localStorage 兜底提取脚本：扫描含 Basic 的值 */
     private static final String EXTRACT_JS_139 =
             "(function(){var out='';function scan(s){try{for(var i=0;i<s.length;i++){"
@@ -66,20 +102,6 @@ public class WebViewLoginFragment extends Fragment {
             + "if(!at&&k.toLowerCase().indexOf('access')>=0)at=v;"
             + "if(!rt&&k.toLowerCase().indexOf('refresh')>=0)rt=v;}}}}catch(e){}}"
             + "scan(window.localStorage);return at+'|||'+rt;})()";
-
-    /**
-     * 桌面模式注入脚本（所有网盘统一）：
-     * 1) 覆写 navigator.userAgent 为桌面 UA——堵住页面 JS 的设备检测（光鸭等站点用 JS 判断而非 HTTP UA）
-     * 2) 强制 viewport width=1280 且允许缩放——首帧即按桌面宽布局，横向可滚动、双指可缩放
-     */
-    private static final String FIX_DESKTOP_JS =
-            "(function(){"
-            + "try{Object.defineProperty(navigator,'userAgent',{get:function(){return '" + DESKTOP_UA + "';},configurable:true});}catch(e){}"
-            + "var m=document.querySelector('meta[name=viewport]');"
-            + "if(!m){m=document.createElement('meta');m.name='viewport';document.head.appendChild(m);}"
-            + "var c='width=1280, initial-scale=1, user-scalable=yes';"
-            + "if(m.content!==c)m.content=c;"
-            + "})()";
 
     private WebView webView;
     private Button btnDone;
@@ -151,6 +173,13 @@ public class WebViewLoginFragment extends Fragment {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 if (PROVIDER_GUANGYA.equals(provider)) {
                     interceptGuangya(request);
+                    // 光鸭主文档 HTML 预注入桌面脚本（赶在 SPA defer 脚本执行前完成设备伪装）
+                    if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
+                            && isGuangyaHost(request.getUrl().getHost())
+                            && isHtmlPage(request.getUrl().toString())) {
+                        var injected = fetchAndInjectDesktop(request.getUrl().toString());
+                        if (injected != null) return injected;
+                    }
                 } else {
                     intercept139(request);
                 }
@@ -288,9 +317,71 @@ public class WebViewLoginFragment extends Fragment {
         return h.equals("guangyapan.com") || h.endsWith(".guangyapan.com");
     }
 
-    /** 注入桌面模式脚本（覆写 navigator.userAgent + 强制桌面 viewport） */
+    /** 注入桌面模式脚本（覆写 navigator.userAgent/UserAgentData + 强制桌面 viewport） */
     private void injectDesktopMode(WebView view) {
-        view.evaluateJavascript(FIX_DESKTOP_JS, null);
+        view.evaluateJavascript(DESKTOP_FIX_JS, null);
+    }
+
+    /** 是否为页面 URL（路径最后一段无文件扩展名，或 .html/.htm） */
+    private static boolean isHtmlPage(String url) {
+        try {
+            var path = java.net.URI.create(url).getPath();
+            if (path == null || path.isEmpty()) return true;
+            var seg = path.substring(path.lastIndexOf('/') + 1);
+            return !seg.contains(".");
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    private static OkHttpClient sHttp;
+
+    private static OkHttpClient httpClient() {
+        if (sHttp != null) return sHttp;
+        synchronized (WebViewLoginFragment.class) {
+            if (sHttp != null) return sHttp;
+            sHttp = new OkHttpClient.Builder()
+                    .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                    .followRedirects(true)
+                    .followSslRedirects(true)
+                    .build();
+            return sHttp;
+        }
+    }
+
+    /**
+     * 光鸭主文档 HTML 预注入：用 OkHttp 重新抓取页面（带 WebView 现有 Cookie），
+     * 在 &lt;/head&gt; 前插入同步桌面脚本，返回注入后的 HTML。
+     * 任何失败/非 HTML/CSP 限制均返回 null，降级让 WebView 自行加载（原有兜底注入仍生效）。
+     */
+    private WebResourceResponse fetchAndInjectDesktop(String url) {
+        try {
+            var builder = new Request.Builder().url(url).header("User-Agent", DESKTOP_UA);
+            var cookies = CookieManager.getInstance().getCookie(url);
+            if (cookies != null && !cookies.isEmpty()) {
+                builder.header("Cookie", cookies);
+            }
+            try (var resp = httpClient().newCall(builder.build()).execute()) {
+                if (!resp.isSuccessful()) return null;
+                var body = resp.body();
+                if (body == null) return null;
+                var html = body.string();
+                var type = resp.headers().get("Content-Type");
+                if (type == null || !type.toLowerCase(java.util.Locale.ROOT).contains("text/html")) return null;
+                // CSP 限制 inline script 时不注入，避免页面 JS 全被 CSP 拦下导致站点不可用（NEW-H-xx）
+                var csp = resp.headers().get("Content-Security-Policy");
+                if (csp != null && !csp.contains("unsafe-inline")) return null;
+                var injected = html.replace("</head>",
+                        "<script>" + DESKTOP_FIX_JS + "</script></head>");
+                if (injected.length() == html.length()) return null; // 无 </head>，放弃注入
+                return new WebResourceResponse("text/html", "utf-8",
+                        new java.io.ByteArrayInputStream(injected.getBytes(StandardCharsets.UTF_8)));
+            }
+        } catch (Exception e) {
+            LogHelp.w(TAG, "光鸭 HTML 预注入失败，降级默认加载: " + url, e);
+            return null;
+        }
     }
 
     /**
