@@ -7,9 +7,8 @@ build/
 local.properties
 build_install.bat
 
-# 内部审查 / 修复记录（不作为公开交付物）
-docs/code-review-*.md
-docs/fix-summary*.md
+# docs 为本地内部文档，不参与 git 同步
+docs/
 
 # Log/OS Files
 *.log
