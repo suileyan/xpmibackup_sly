@@ -168,6 +168,8 @@ public class WebViewLoginFragment extends Fragment {
             @Override
             public boolean onConsoleMessage(android.webkit.ConsoleMessage consoleMessage) {
                 var msg = consoleMessage.message() + " (line " + consoleMessage.lineNumber() + ")";
+                // 前端 console 输出同步记录到 web.log（可能含容量等业务数据）
+                LogHelp.web("CONSOLE " + msg);
                 if (consoleMessage.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
                     LogHelp.e(TAG, "page JS error: " + msg);
                 } else {
@@ -180,6 +182,11 @@ public class WebViewLoginFragment extends Fragment {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                // 记录所有子资源请求到独立 web.log，用于定位网盘前端 API（容量等）调用逻辑（NEW-H-06）
+                LogHelp.web("REQ " + request.getMethod() + " " + request.getUrl());
+                if (request.isForMainFrame()) {
+                    LogHelp.web("  ^ main-frame redirect=" + request.isRedirect());
+                }
                 if (PROVIDER_GUANGYA.equals(provider)) {
                     interceptGuangya(request);
                     // 光鸭主文档 HTML 预注入桌面脚本（赶在 SPA defer 脚本执行前完成设备伪装）
@@ -220,6 +227,11 @@ public class WebViewLoginFragment extends Fragment {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                LogHelp.web("PAGE_START " + url);
+            }
+
+            @Override
             public void onPageCommitVisible(WebView view, String url) {
                 // 第一帧渲染前注入桌面模式：viewport 越早生效，首帧即桌面布局（光鸭等 SPA 不会先按移动渲染）
                 injectDesktopMode(view);
@@ -227,6 +239,7 @@ public class WebViewLoginFragment extends Fragment {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                LogHelp.web("PAGE_FINISH " + url);
                 // 再次注入：防页面脚本/SPA 重写 viewport；随后兜底扫描 localStorage
                 injectDesktopMode(view);
                 if (PROVIDER_GUANGYA.equals(provider)) {

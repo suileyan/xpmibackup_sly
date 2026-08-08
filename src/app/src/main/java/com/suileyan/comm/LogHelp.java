@@ -222,6 +222,41 @@ public class LogHelp {
         return enabled;
     }
 
+    /** 敏感 URL 参数：匹配 query/header/文本中的 token/cookie 等凭据，日志写入时值打码（NEW-H-07） */
+    private static final java.util.regex.Pattern SENSITIVE_PARAM = java.util.regex.Pattern.compile(
+            "(?i)((?:^|[?&;\\s'\"\\\\])(?:token|access_token|refresh_token|authorization|auth|cookie|__puus|__pus|"
+            + "passwd|password|secret|signature|api_key|apikey|sessionid|sid)=)[^&;\\s'\"\\\\]*");
+
+    /**
+     * 日志脱敏：将 URL/文本中的敏感参数值替换为 ***，避免 token/cookie 落入日志文件
+     */
+    private static String sanitizeSensitive(String text) {
+        if (text == null || text.isEmpty()) return text;
+        return SENSITIVE_PARAM.matcher(text).replaceAll("$1***");
+    }
+
+    /**
+     * 追加 WebView 调试日志到独立的 年月日_web.log（不受 log_enabled 开关影响，NEW-H-06）
+     * 用于排查网盘前端请求逻辑（如容量接口定位）：记录页面请求/跳转/console 输出；
+     * 写入前统一脱敏（URL query 中的 token/cookie 等参数值打码，NEW-H-07）
+     */
+    public static void web(String message) {
+        try {
+            var dir = new File(LOG_DIR);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+            var date = DAY_FORMAT.get().format(new Date());
+            var time = TS_FORMAT.get().format(new Date());
+            var file = new File(dir, date + "_web.log");
+            try (var writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), StandardCharsets.UTF_8))) {
+                writer.write(time + " " + sanitizeSensitive(message));
+                writer.newLine();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     /**
      * 追加写入本地日志文件，任何写入异常都只回落到系统日志，避免影响主流程
      */
@@ -238,7 +273,7 @@ public class LogHelp {
             var time = TS_FORMAT.get().format(new Date());
             var file = new File(dir, date + ".log");
             try (var writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), StandardCharsets.UTF_8))) {
-                writer.write(time + " " + priorityToLetter(priority) + "/" + tag + ": " + message);
+                writer.write(time + " " + priorityToLetter(priority) + "/" + tag + ": " + sanitizeSensitive(message));
                 writer.newLine();
                 if (throwable != null) {
                     writer.write(Log.getStackTraceString(throwable));
