@@ -13,6 +13,9 @@ docs/
 # Log/OS Files
 *.log
 
+# Temporary files (local scratch dir, not synced)
+/tmp/
+
 # Android Studio generated files and folders
 captures/
 .externalNativeBuild/
