@@ -1,6 +1,7 @@
 package com.suileyan.xpmibackup;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
@@ -9,6 +10,11 @@ import android.os.Environment;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
+
+import com.suileyan.comm.Async;
+import com.suileyan.comm.ConfigHelp;
+import com.suileyan.comm.LogHelp;
+import com.suileyan.comm.UpdateChecker;
 
 /**
  * 云备份助手主界面
@@ -38,6 +44,8 @@ public class MainActivity extends Activity {
     private long lastBackPressTime = 0;
     /** 主题切换重建标志：重建后淡入 + 重开设置页 */
     private boolean themeTransition = false;
+    /** 启动版本检测只执行一次（进程内），使用过程中不再自动检测 */
+    private static volatile boolean sUpdateChecked = false;
 
     /**
      * 初始化界面：绑定Tab控件，注册切换事件，检查文件管理权限
@@ -115,6 +123,64 @@ public class MainActivity extends Activity {
         }
         // 全面屏手势返回：API 33+ 注册 OnBackInvokedCallback（按设置开关启用/关闭预测动画）
         updateBackInvoke();
+        // 仅应用进入时自动检测一次版本（设置页可关闭，弹小窗可点空白取消）
+        checkUpdatesOnLaunch();
+    }
+
+    /**
+     * 启动版本检测：受 config.ini `update_check`（默认 on）控制；
+     * 进程内只检测一次（sUpdateChecked），检测到新版本弹小窗（可点空白/返回取消），不打断使用
+     */
+    private void checkUpdatesOnLaunch() {
+        if (sUpdateChecked) return;
+        sUpdateChecked = true;
+        if ("off".equals(ConfigHelp.getString("update_check", "on"))) return;
+        String currentVersion;
+        try {
+            currentVersion = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            currentVersion = "";
+        }
+        final var version = currentVersion == null ? "" : currentVersion;
+        Async.run("check-update-launch", () -> {
+            var result = UpdateChecker.check(version);
+            if (!result.ok || !result.hasNew) return;
+            runOnUiThread(() -> {
+                // Activity 已销毁（用户快速退出/主题重建中）时不弹窗，避免 BadTokenException
+                if (isFinishing() || isDestroyed()) return;
+                showUpdateDialog(result);
+            });
+        });
+    }
+
+    /** 发现新版本小窗：可点空白/返回取消；「前往下载」GitHub 页 + 「下载 APK」直链 */
+    private void showUpdateDialog(UpdateChecker.Result result) {
+        var builder = new AlertDialog.Builder(this)
+                .setTitle(R.string.about_title)
+                .setMessage(getString(R.string.about_new_version, result.latestVersion))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setCancelable(true);
+        // 下载 APK：默认 GitHub 官方直链（无安全警报）；仅显式配置 update_mirror 时走镜像
+        if (!result.downloadUrl.isEmpty()) {
+            builder.setNeutralButton(R.string.about_download_apk,
+                    (d, w) -> openUpdateBrowser(UpdateChecker.downloadUrlWithMirror(result.downloadUrl)));
+        }
+        builder.setPositiveButton(R.string.about_open_browser,
+                (d, w) -> openUpdateBrowser(result.htmlUrl));
+        var dialog = builder.create();
+        // 点击空白处取消弹窗
+        dialog.setCanceledOnTouchOutside(true);
+        dialog.show();
+    }
+
+    /** 打开浏览器（无浏览器应用时捕获异常提示） */
+    private void openUpdateBrowser(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            LogHelp.w("XpMiBackup", "open browser failed: " + url, e);
+            android.widget.Toast.makeText(this, R.string.about_check_failed, android.widget.Toast.LENGTH_SHORT).show();
+        }
     }
 
     /**

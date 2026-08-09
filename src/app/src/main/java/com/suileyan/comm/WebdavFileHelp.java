@@ -158,7 +158,9 @@ public class WebdavFileHelp {
     public static boolean testConnection() throws Exception {
         var url = baseUrl();
         var res = propfind(url, 0);
-        return Integer.parseInt(res[0]) == HTTP_MULTISTATUS;
+        var ok = Integer.parseInt(res[0]) == HTTP_MULTISTATUS;
+        LogHelp.i(TAG, "WebDAV test " + (ok ? "OK" : "FAILED") + " http=" + res[0] + " host=" + hostOf(url));
+        return ok;
     }
 
     /** 列出backup_path目录中的备份子目录名 */
@@ -169,6 +171,7 @@ public class WebdavFileHelp {
         for (var name : entries) {
             if (!name.isEmpty()) dirs.add(name);
         }
+        LogHelp.i(TAG, "WebDAV listDirs OK path=" + backupPath + " count=" + dirs.size());
         return dirs;
     }
 
@@ -226,6 +229,7 @@ public class WebdavFileHelp {
             // 服务端 href 是 URL 编码的，解码后返回避免二次编码（NEW-M-08）
             entries.add(new RemoteEntry(decodeName(name), size, isDir, System.currentTimeMillis()));
         }
+        LogHelp.i(TAG, "WebDAV listEntries OK dir=" + path + " count=" + entries.size());
         return entries;
     }
 
@@ -260,12 +264,12 @@ public class WebdavFileHelp {
         }
     }
 
-    /**
-     * 删除远端目录及其所有内容
+    /** 删除远端目录及其所有内容
      * 按RFC 4918，WebDAV的DELETE天然递归删除非空集合，无需客户端先列再删
      * 少数不支持递归删除的服务器再走回退方案
      */
     public static void deleteDir(String remoteDir) throws Exception {
+        LogHelp.i(TAG, "WebDAV delete dir start: " + remoteDir);
         var url = remoteUrl(remoteDir);
         if (!url.endsWith("/")) url += "/";
         var request = newRequest(url).method("DELETE", null).build();
@@ -296,6 +300,8 @@ public class WebdavFileHelp {
         var request = newRequest(url).method("DELETE", null).build();
         try (var resp = getClient().newCall(request).execute()) {
             if (resp.body() != null) resp.body().close();
+            LogHelp.i(TAG, "WebDAV delete file " + (resp.code() >= 200 && resp.code() < 300 ? "done" : "failed http=" + resp.code())
+                    + ": " + remotePath);
         }
     }
 
@@ -307,6 +313,7 @@ public class WebdavFileHelp {
         if (!localFile.exists()) throw new FileNotFoundException("file not found: " + localPath);
         mkdirs(remoteDir);
         var remotePath = (remoteDir != null && !remoteDir.isEmpty() ? remoteDir + "/" : "") + localFile.getName();
+        LogHelp.i(TAG, "WebDAV upload start: " + remotePath + " size=" + localFile.length());
         var requestBody = RequestBody.create(MediaType.parse("application/octet-stream"), localFile);
         var request = newRequest(remoteUrl(remotePath)).put(requestBody).build();
         try (var resp = getClient().newCall(request).execute()) {
@@ -314,8 +321,10 @@ public class WebdavFileHelp {
             // 必须消费响应体，否则 OkHttp 关闭连接时可能抛 EIO 且无法复用连接（NEW-L-03）
             if (resp.body() != null) resp.body().close();
             if (code >= 200 && code < 300) {
+                LogHelp.i(TAG, "WebDAV upload done: " + remotePath + " size=" + localFile.length());
                 return "OK: " + remotePath + " (" + localFile.length() + " bytes)";
             }
+            LogHelp.w(TAG, "WebDAV upload failed http=" + code + " path=" + remotePath);
             return "ERROR: HTTP " + code;
         }
     }
@@ -329,6 +338,7 @@ public class WebdavFileHelp {
 
         mkdirs(remoteDir);
         var remotePath = (remoteDir != null && !remoteDir.isEmpty() ? remoteDir + "/" : "") + localFile.getName();
+        LogHelp.i(TAG, "WebDAV backup upload start: " + remotePath + " size=" + fileSize);
 
         // try-with-resources保证异常时fis被关闭，避免文件句柄泄漏
         try (var fis = new FileInputStream(localFile)) {
@@ -338,6 +348,8 @@ public class WebdavFileHelp {
                 var code = resp.code();
                 // 必须消费response body，否则OkHttp关闭连接时会抛出EIO异常
                 if (resp.body() != null) resp.body().string();
+                LogHelp.i(TAG, "WebDAV backup upload " + (code >= 200 && code < 300 ? "done" : "failed http=" + code)
+                        + ": " + remotePath + " size=" + fileSize);
                 if (cb != null) {
                     if (code >= 200 && code < 300) {
                         cb.onFinish(taskId, 0, "success");
@@ -394,10 +406,14 @@ public class WebdavFileHelp {
 
     /** 下载单个文件从WebDAV到本地 */
     public static String downloadFile(String remotePath, String localPath) throws Exception {
+        LogHelp.i(TAG, "WebDAV download start: " + remotePath + " -> " + localPath);
         var request = newRequest(remoteUrl(remotePath)).get().build();
         try (var resp = getClient().newCall(request).execute()) {
             var code = resp.code();
-            if (code != 200) return "ERROR: HTTP " + code;
+            if (code != 200) {
+                LogHelp.w(TAG, "WebDAV download failed http=" + code + " path=" + remotePath);
+                return "ERROR: HTTP " + code;
+            }
             var localFile = new File(localPath);
             var parent = localFile.getParentFile();
             if (parent != null) parent.mkdirs();
@@ -406,12 +422,23 @@ public class WebdavFileHelp {
             // try-with-resources保证输入输出流都被关闭
             try (var is = body.byteStream(); var fos = new FileOutputStream(localFile)) {
                 var total = streamCopy(is, fos);
+                LogHelp.i(TAG, "WebDAV download done: " + remotePath + " bytes=" + total);
                 return "OK: " + remotePath + " -> " + localPath + " (" + total + " bytes)";
             }
         }
     }
 
     // ========== 工具方法 ==========
+
+    /** 日志只打印主机名（webdav_url 不含凭据，但仍避免长 URL/query 噪音） */
+    private static String hostOf(String url) {
+        try {
+            var u = java.net.URI.create(url);
+            return u.getHost() != null ? u.getHost() : url;
+        } catch (Exception e) {
+            return url.length() > 80 ? url.substring(0, 80) + "..." : url;
+        }
+    }
 
     /** 流拷贝（不负责关闭流，由调用方用try-with-resources管理） */
     private static long streamCopy(java.io.InputStream in, java.io.OutputStream out) throws Exception {

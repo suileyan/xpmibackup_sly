@@ -16,8 +16,16 @@
     <string name="theme_night">黑夜</string>
     <string name="predictive_back">预测性返回</string>
     <string name="predictive_back_hint">全面屏手势返回时显示系统预测动画</string>
+    <string name="update_check">版本检测</string>
+    <string name="update_check_hint">进入应用时自动检查新版本</string>
     <string name="about_version">版本 %1$s</string>
-    <string name="about_coming_soon">关于页内容筹备中</string>
+    <string name="about_check_update">检查更新</string>
+    <string name="about_checking">正在检查更新…</string>
+    <string name="about_latest">已是最新版本</string>
+    <string name="about_new_version">发现新版本 v%1$s，是否前往下载？</string>
+    <string name="about_check_failed">检查失败，请稍后重试</string>
+    <string name="about_open_browser">前往下载</string>
+    <string name="about_download_apk">下载 APK</string>
     <string name="tab_device_config">设备配置</string>
     <string name="tab_service_config">NAS</string>
     <string name="tab_account_config">云盘</string>

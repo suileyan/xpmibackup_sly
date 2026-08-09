@@ -119,29 +119,32 @@ public class LogHelp {
     /**
      * 按日志类型输出到系统日志，并在开关开启时写入本地文件
      * error 级日志同时触发错误日志落盘（缓冲流程 + 错误详情）
+     * 全链路统一脱敏：message 与异常堆栈在进入任何输出通道前打码（NEW-H-07）
      */
     public static void log(int priority, String tag, String message, Throwable throwable) {
-        if (throwable == null) {
-            Log.println(priority, tag, message);
+        var safeMessage = sanitizeSensitive(message);
+        var safeStack = throwable != null ? sanitizeSensitive(Log.getStackTraceString(throwable)) : null;
+        if (safeStack == null) {
+            Log.println(priority, tag, safeMessage);
         } else {
-            Log.println(priority, tag, message + "\n" + Log.getStackTraceString(throwable));
+            Log.println(priority, tag, safeMessage + "\n" + safeStack);
         }
-        recordRing(priority, tag, message, throwable);
-        writeFileLog(priority, tag, message, throwable);
+        recordRing(priority, tag, safeMessage, safeStack);
+        writeFileLog(priority, tag, safeMessage, safeStack);
         if (priority >= Log.ERROR) {
-            flushErrorLog(priority, tag, message, throwable);
+            flushErrorLog(priority, tag, safeMessage, safeStack);
         }
     }
 
-    /** 记录一条近期日志到环形缓冲 */
-    private static void recordRing(int priority, String tag, String message, Throwable throwable) {
+    /** 记录一条近期日志到环形缓冲（message/stack 已脱敏） */
+    private static void recordRing(int priority, String tag, String message, String stack) {
         var line = new StringBuilder();
         line.append(TS_FORMAT.get().format(new Date()))
                 .append(' ').append(priorityToLetter(priority)).append('/').append(tag)
                 .append(": ").append(message == null ? "" : message);
-        if (throwable != null) {
+        if (stack != null) {
             // 缓冲只保留异常首行，完整堆栈随错误详情落盘
-            var first = throwable.toString();
+            var first = stack;
             var idx = first.indexOf('\n');
             line.append(" | ").append(idx < 0 ? first : first.substring(0, idx));
         }
@@ -157,7 +160,7 @@ public class LogHelp {
      * 错误日志落盘：将"出错前流程（环形缓冲）+ 本次错误详情"写入 年月日_err.log
      * 双进程（settings/backup）可能并发写同一文件，进程内 synchronized，跨进程竞态可接受
      */
-    private static void flushErrorLog(int priority, String tag, String message, Throwable throwable) {
+    private static void flushErrorLog(int priority, String tag, String message, String stack) {
         try {
             var dir = new File(ERR_LOG_DIR);
             if (!dir.exists() && !dir.mkdirs()) {
@@ -180,8 +183,8 @@ public class LogHelp {
             }
             sb.append("---- 错误详情 ----\n");
             sb.append(priorityToLetter(priority)).append('/').append(tag).append(": ").append(message).append('\n');
-            if (throwable != null) {
-                sb.append(Log.getStackTraceString(throwable)).append('\n');
+            if (stack != null) {
+                sb.append(stack).append('\n');
             }
             sb.append("------------------------------------------------\n");
             try (var writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), StandardCharsets.UTF_8))) {
@@ -222,17 +225,32 @@ public class LogHelp {
         return enabled;
     }
 
-    /** 敏感 URL 参数：匹配 query/header/文本中的 token/cookie 等凭据，日志写入时值打码（NEW-H-07） */
+    /**
+     * 敏感 URL 参数：匹配 query/header/文本中的 token/cookie 等凭据，日志写入时值打码（NEW-H-07）
+     * 覆盖：token 类、authorization/cookie/密码/签名/会话 id 等键值形式
+     */
     private static final java.util.regex.Pattern SENSITIVE_PARAM = java.util.regex.Pattern.compile(
-            "(?i)((?:^|[?&;\\s'\"\\\\])(?:token|access_token|refresh_token|authorization|auth|cookie|__puus|__pus|"
-            + "passwd|password|secret|signature|api_key|apikey|sessionid|sid)=)[^&;\\s'\"\\\\]*");
+            "(?i)((?:^|[?&;\\s'\"\\\\])(?:token|access_token|accessToken|refresh_token|refreshToken|"
+            + "authorization|auth|cookie|cookie_token|__puus|__pus|passwd|password|pass|pwd|secret|signature|"
+            + "api_key|apikey|sessionid|sid|did|x-device-sign)=)[^&;\\s'\"\\\\]*");
+
+    /** URL 内嵌凭据（user:pass@host）：打码 userinfo 部分，防止 webdav_url 等含账号密码落日志 */
+    private static final java.util.regex.Pattern URL_USERINFO = java.util.regex.Pattern.compile(
+            "(?i)((?:https?|ftp)://)[^/@\\s]+@");
+
+    /** Authorization: Basic xxx 形式（冒号分隔的请求头），Basic 后的 Base64 凭据打码 */
+    private static final java.util.regex.Pattern BASIC_HEADER = java.util.regex.Pattern.compile(
+            "(?i)(authorization:\\s*basic\\s+)[^\\s,;]+");
 
     /**
-     * 日志脱敏：将 URL/文本中的敏感参数值替换为 ***，避免 token/cookie 落入日志文件
+     * 日志脱敏：将 URL 内嵌凭据、Basic 头、文本中的敏感参数值替换为 ***，避免 token/cookie/密码落入日志
      */
     private static String sanitizeSensitive(String text) {
         if (text == null || text.isEmpty()) return text;
-        return SENSITIVE_PARAM.matcher(text).replaceAll("$1***");
+        var out = SENSITIVE_PARAM.matcher(text).replaceAll("$1***");
+        out = URL_USERINFO.matcher(out).replaceAll("$1***@");
+        out = BASIC_HEADER.matcher(out).replaceAll("$1***");
+        return out;
     }
 
     /**
@@ -260,7 +278,7 @@ public class LogHelp {
     /**
      * 追加写入本地日志文件，任何写入异常都只回落到系统日志，避免影响主流程
      */
-    private static void writeFileLog(int priority, String tag, String message, Throwable throwable) {
+    private static void writeFileLog(int priority, String tag, String message, String stack) {
         if (!isFileLogEnabled()) {
             return;
         }
@@ -273,10 +291,10 @@ public class LogHelp {
             var time = TS_FORMAT.get().format(new Date());
             var file = new File(dir, date + ".log");
             try (var writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), StandardCharsets.UTF_8))) {
-                writer.write(time + " " + priorityToLetter(priority) + "/" + tag + ": " + sanitizeSensitive(message));
+                writer.write(time + " " + priorityToLetter(priority) + "/" + tag + ": " + message);
                 writer.newLine();
-                if (throwable != null) {
-                    writer.write(Log.getStackTraceString(throwable));
+                if (stack != null) {
+                    writer.write(stack);
                     writer.newLine();
                 }
             }

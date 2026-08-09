@@ -23,6 +23,7 @@ public class SettingsFragment extends Fragment {
 
     private RadioGroup rgTheme;
     private android.widget.Switch swPredictiveBack;
+    private android.widget.Switch swUpdateCheck;
     /** 初始化标志：避免初始化 setChecked 触发监听器导致重复保存 */
     private boolean initialized = false;
 
@@ -32,6 +33,7 @@ public class SettingsFragment extends Fragment {
 
         rgTheme = view.findViewById(R.id.rg_theme);
         swPredictiveBack = view.findViewById(R.id.sw_predictive_back);
+        swUpdateCheck = view.findViewById(R.id.sw_update_check);
 
         // 读取当前设置
         var themeMode = ConfigHelp.getString("theme_mode", "system");
@@ -43,6 +45,7 @@ public class SettingsFragment extends Fragment {
             rgTheme.check(R.id.rb_theme_system);
         }
         swPredictiveBack.setChecked(!"off".equals(ConfigHelp.getString("predictive_back", "on")));
+        swUpdateCheck.setChecked(!"off".equals(ConfigHelp.getString("update_check", "on")));
         initialized = true;
 
         rgTheme.setOnCheckedChangeListener((group, checkedId) -> {
@@ -99,6 +102,17 @@ public class SettingsFragment extends Fragment {
             var activity = getActivity();
             if (activity instanceof MainActivity) {
                 ((MainActivity) activity).updateBackInvoke();
+            }
+        });
+
+        swUpdateCheck.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (!initialized) return;
+            try {
+                var cfg = ConfigHelp.load();
+                cfg.put("update_check", isChecked ? "on" : "off");
+                ConfigHelp.save(cfg);
+            } catch (Exception e) {
+                LogHelp.w(TAG, "save update check failed", e);
             }
         });
 

@@ -282,20 +282,40 @@ public class ServiceConfigFragment extends Fragment {
         String customScript;
     }
 
-    /** 用快照构造临时方案测试连接 */
+    /** 用快照构造临时方案测试连接（后台线程调用）；记录开始/结果/耗时与主机参数（不含任何凭据） */
     private boolean testWithForm(FormSnapshot snapshot) {
+        var start = System.currentTimeMillis();
+        LogHelp.i(TAG, "NAS test start: type=" + snapshot.type + " " + safeTestParams(snapshot.params));
         try {
             EncryptedCredStore.put(TEST_KEY, "smb_pass", snapshot.smbPass);
             EncryptedCredStore.put(TEST_KEY, "webdav_pass", snapshot.webdavPass);
             EncryptedCredStore.put(TEST_KEY, "custom_script_b64", snapshot.customScript);
             var tmpProfile = new Profile(TEST_KEY, "test", snapshot.type, System.currentTimeMillis(), snapshot.params);
-            return newProvider(snapshot.type, tmpProfile).testConnection();
+            var ok = newProvider(snapshot.type, tmpProfile).testConnection();
+            LogHelp.i(TAG, "NAS test " + (ok ? "OK" : "FAILED") + " type=" + snapshot.type
+                    + " cost=" + (System.currentTimeMillis() - start) + "ms");
+            return ok;
         } catch (Exception e) {
-            LogHelp.e(TAG, "test connection failed", e);
+            LogHelp.e(TAG, "NAS test failed type=" + snapshot.type
+                    + " cost=" + (System.currentTimeMillis() - start) + "ms", e);
             return false;
         } finally {
             EncryptedCredStore.removeAccount(TEST_KEY);
         }
+    }
+
+    /** 测试日志只输出非敏感连接参数（服务器/端口/共享/用户名/URL），密码与脚本内容绝不落日志 */
+    private static String safeTestParams(Map<String, String> params) {
+        if (params == null) return "";
+        var sb = new StringBuilder();
+        for (var key : new String[]{"smb_server", "smb_port", "smb_share", "smb_user", "webdav_url", "webdav_user"}) {
+            var v = params.get(key);
+            if (v != null && !v.isEmpty()) {
+                if (sb.length() > 0) sb.append(" ");
+                sb.append(key).append("=").append(v);
+            }
+        }
+        return sb.toString();
     }
 
     /**

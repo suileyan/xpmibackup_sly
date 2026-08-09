@@ -16,8 +16,16 @@
     <string name="theme_night">Night</string>
     <string name="predictive_back">Predictive back</string>
     <string name="predictive_back_hint">Show system predictive animation on gesture back</string>
+    <string name="update_check">Update check</string>
+    <string name="update_check_hint">Check for new versions when app opens</string>
     <string name="about_version">Version %1$s</string>
-    <string name="about_coming_soon">About page is under construction</string>
+    <string name="about_check_update">Check for updates</string>
+    <string name="about_checking">Checking for updates...</string>
+    <string name="about_latest">You are up to date</string>
+    <string name="about_new_version">New version v%1$s available. Download now?</string>
+    <string name="about_check_failed">Check failed. Please try again later.</string>
+    <string name="about_open_browser">Download</string>
+    <string name="about_download_apk">Download APK</string>
     <string name="tab_device_config">Device</string>
     <string name="tab_service_config">NAS</string>
     <string name="tab_account_config">Cloud</string>

@@ -48,12 +48,16 @@ public class SmbFileHelp {
             this.backupPath = cfg.optString("backup_path", "");
 
             try {
+                LogHelp.i(TAG, "SMB connecting " + server + ":" + port + " share=" + shareName);
                 var config = SmbConfig.builder().build();
                 var client = new SMBClient(config);
                 this.connection = client.connect(server, port);
                 this.session = this.connection.authenticate(new AuthenticationContext(user, pass.toCharArray(), ""));
                 this.share = (DiskShare) session.connectShare(shareName);
+                LogHelp.i(TAG, "SMB connected " + server + ":" + port + " share=" + shareName);
             } catch (Exception e) {
+                // 只记录服务器/端口/共享名，密码与用户名绝不落日志
+                LogHelp.e(TAG, "SMB connect failed: " + server + ":" + port + " share=" + shareName, e);
                 throw new RuntimeException("SMB connect failed", e);
             }
         }
@@ -98,7 +102,9 @@ public class SmbFileHelp {
 
     /** 测试SMB连接是否可达 */
     public static boolean testConnection() throws Exception {
+        LogHelp.i(TAG, "SMB test connection start");
         try (var s = new SmbSession(ConfigHelp.getString("smb_share", ""))) {
+            LogHelp.i(TAG, "SMB test connection OK");
             return true;
         }
     }
@@ -113,6 +119,7 @@ public class SmbFileHelp {
                     dirs.add(name);
                 }
             }
+            LogHelp.i(TAG, "SMB listDirs OK path=" + s.backupPath + " count=" + dirs.size());
         }
         return dirs;
     }
@@ -131,6 +138,7 @@ public class SmbFileHelp {
                     : System.currentTimeMillis();
                 entries.add(new RemoteEntry(name, size, isDir, modified));
             }
+            LogHelp.i(TAG, "SMB listEntries OK dir=" + remoteDir + " count=" + entries.size());
         }
         return entries;
     }
@@ -155,9 +163,11 @@ public class SmbFileHelp {
 
     /** 删除远端目录及其所有内容 */
     public static void deleteDir(String remoteDir) throws Exception {
+        LogHelp.i(TAG, "SMB delete dir start: " + remoteDir);
         try (var s = new SmbSession(ConfigHelp.getString("smb_share", ""))) {
             var path = normalizeDeletePath(s.backupPath, remoteDir);
             deleteDirRecursive(s.share, path);
+            LogHelp.i(TAG, "SMB delete dir done: " + remoteDir);
         }
     }
 
@@ -255,9 +265,11 @@ public class SmbFileHelp {
             var localFile = new File(localPath);
             if (!localFile.exists()) throw new FileNotFoundException("file not found: " + localPath);
 
+            LogHelp.i(TAG, "SMB upload start: " + localPath + " size=" + localFile.length());
             s.mkdirs(remoteDir);
             var remotePath = (remoteDir != null && !remoteDir.isEmpty() ? remoteDir + "/" : "") + localFile.getName();
             uploadWholeFileToSmb(s.share, localFile, remotePath, null, "", 0L, localFile.length());
+            LogHelp.i(TAG, "SMB upload done: " + remotePath + " size=" + localFile.length());
             return "OK: " + remotePath + " (" + localFile.length() + " bytes)";
         }
     }
@@ -276,11 +288,13 @@ public class SmbFileHelp {
             if (!localFile.exists()) throw new FileNotFoundException("file not found: " + localPath);
 
             var fileSize = localFile.length();
+            LogHelp.i(TAG, "SMB backup upload start: " + localPath + " size=" + fileSize);
 
             s.mkdirs(remoteDir);
             var remotePath = (remoteDir != null && !remoteDir.isEmpty() ? remoteDir + "/" : "") + localFile.getName();
             uploadWholeFileToSmb(s.share, localFile, remotePath, cb, taskId, 0L, fileSize);
 
+            LogHelp.i(TAG, "SMB backup upload done: " + remotePath + " size=" + fileSize);
             if (cb != null) cb.onFinish(taskId, 0, "success");
         }
     }
@@ -306,6 +320,7 @@ public class SmbFileHelp {
             var parent = localFile.getParentFile();
             if (parent != null) parent.mkdirs();
 
+            LogHelp.i(TAG, "SMB download start: " + remotePath + " -> " + localPath);
             var smbFile = s.share.openFile(remotePath,
                 EnumSet.of(AccessMask.GENERIC_READ, AccessMask.SYNCHRONIZE),
                 EnumSet.of(FileAttributes.FILE_ATTRIBUTE_NORMAL),
@@ -316,6 +331,7 @@ public class SmbFileHelp {
             // try-with-resources保证异常时输入输出流和SMB文件句柄都被关闭
             try (var is = smbFile.getInputStream(); var fos = new FileOutputStream(localFile)) {
                 var total = streamCopy(is, fos);
+                LogHelp.i(TAG, "SMB download done: " + remotePath + " bytes=" + total);
                 return "OK: " + remotePath + " -> " + localPath + " (" + total + " bytes)";
             } finally {
                 try { smbFile.close(); } catch (Exception ignored) {}

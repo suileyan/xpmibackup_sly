@@ -59,11 +59,21 @@
             android:layout_marginTop="4dp" />
 
         <TextView
+            android:id="@+id/tv_update_status"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/about_coming_soon"
             android:textSize="13sp"
             android:textColor="@color/text_hint"
             android:layout_marginTop="20dp" />
+
+        <Button
+            android:id="@+id/btn_check_update"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/about_check_update"
+            android:textColor="@color/primary_text_on"
+            android:background="@drawable/bg_button_primary"
+            android:textSize="15sp"
+            android:layout_marginTop="12dp" />
     </LinearLayout>
 </LinearLayout>
