@@ -70,6 +70,7 @@
             android:layout_marginBottom="16dp">
 
             <TextView
+                android:id="@+id/tv_profile_name_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/profile_name"
@@ -611,9 +612,27 @@
                 android:layout_height="wrap_content"
                 android:text="@string/footer_text"
                 android:textSize="12sp"
-                android:textColor="@color/text_hint"
-                android:textColorLink="@color/primary"
-                android:autoLink="web" />
+                android:textColor="@color/text_hint" />
+
+            <TextView
+                android:id="@+id/tv_footer_zgcwkj"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/author"
+                android:textSize="12sp"
+                android:textColor="@color/primary"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/tv_footer_suileyan"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/footer_suileyan"
+                android:textSize="12sp"
+                android:textColor="@color/primary"
+                android:clickable="true"
+                android:focusable="true" />
 
             <TextView
                 android:id="@+id/tv_script_help"

@@ -1,9 +1,11 @@
 package com.suileyan.comm;
 
 import com.hierynomus.msdtyp.AccessMask;
+import com.hierynomus.mserref.NtStatus;
 import com.hierynomus.mssmb2.SMB2CreateDisposition;
 import com.hierynomus.mssmb2.SMB2CreateOptions;
 import com.hierynomus.mssmb2.SMB2ShareAccess;
+import com.hierynomus.mssmb2.SMBApiException;
 import com.hierynomus.msfscc.FileAttributes;
 import com.hierynomus.smbj.SMBClient;
 import com.hierynomus.smbj.SmbConfig;
@@ -58,8 +60,29 @@ public class SmbFileHelp {
             } catch (Exception e) {
                 // 只记录服务器/端口/共享名，密码与用户名绝不落日志
                 LogHelp.e(TAG, "SMB connect failed: " + server + ":" + port + " share=" + shareName, e);
-                throw new RuntimeException("SMB connect failed", e);
+                // 附稳定错误码（ERR_SMB_*），供 UI 层映射为本地化提示（共享不存在/无权限等）
+                throw new RuntimeException("SMB connect failed: " + smbErrorCode(e), e);
             }
+        }
+
+        /** 遍历异常链分类 SMB 连接失败原因，返回稳定错误码（UI 层据此映射多语言提示） */
+        private static String smbErrorCode(Throwable t) {
+            var cur = t;
+            while (cur != null) {
+                if (cur instanceof SMBApiException) {
+                    var code = ((SMBApiException) cur).getStatusCode();
+                    if (code == NtStatus.STATUS_BAD_NETWORK_NAME.getValue()
+                            || code == NtStatus.STATUS_BAD_NETWORK_PATH.getValue()) {
+                        return "ERR_SMB_SHARE_NOT_FOUND";
+                    }
+                    if (code == NtStatus.STATUS_ACCESS_DENIED.getValue()) {
+                        return "ERR_SMB_SHARE_NO_PERMISSION";
+                    }
+                    return "ERR_SMB_REJECTED";
+                }
+                cur = cur.getCause();
+            }
+            return "ERR_SMB_CONNECT";
         }
 
         /** 创建远程目录 */

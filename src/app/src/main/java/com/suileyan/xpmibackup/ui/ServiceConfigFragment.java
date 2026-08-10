@@ -55,6 +55,7 @@ public class ServiceConfigFragment extends Fragment {
     private RadioButton rbSmb, rbWebdav;
     private LinearLayout panelSmb, panelWebdav;
     private TextView tabNas, tabCustom;
+    private TextView tvProfileNameLabel;
     private LinearLayout containerNas, containerCustom;
     private LinearLayout containerScriptVars;
     private TextView tvScriptVarsTitle, tvScriptVarsHint;
@@ -81,6 +82,7 @@ public class ServiceConfigFragment extends Fragment {
 
         profileSpinner = view.findViewById(R.id.profile_spinner);
         etProfileName = view.findViewById(R.id.et_profile_name);
+        tvProfileNameLabel = view.findViewById(R.id.tv_profile_name_label);
         rgProtocol = view.findViewById(R.id.rg_protocol);
         rbSmb = view.findViewById(R.id.rb_smb);
         rbWebdav = view.findViewById(R.id.rb_webdav);
@@ -146,9 +148,15 @@ public class ServiceConfigFragment extends Fragment {
         });
         rgProtocol.setOnCheckedChangeListener((group, checkedId) -> showProtocolPanel(checkedId));
         btnSave.setOnClickListener(v -> saveAndTest());
-        ((TextView) view.findViewById(R.id.tv_footer)).setOnClickListener(v -> {
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(getString(R.string.author_url))));
-        });
+        // footer：两个作者链接各自独立显式跳转（不依赖 HTML 链接机制，点哪个跳哪个）
+        var tvFooterZgcwkj = (TextView) view.findViewById(R.id.tv_footer_zgcwkj);
+        tvFooterZgcwkj.setPaintFlags(tvFooterZgcwkj.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+        tvFooterZgcwkj.setOnClickListener(v ->
+                openUrl(getString(R.string.author_url)));
+        var tvFooterSuileyan = (TextView) view.findViewById(R.id.tv_footer_suileyan);
+        tvFooterSuileyan.setPaintFlags(tvFooterSuileyan.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+        tvFooterSuileyan.setOnClickListener(v ->
+                openUrl(getString(R.string.suileyan_url)));
 
         loadConfig();
         com.suileyan.comm.LogHelp.i(TAG, "STARTUP ServiceConfigFragment onCreateView: " + (System.currentTimeMillis() - t0) + "ms");
@@ -323,17 +331,21 @@ public class ServiceConfigFragment extends Fragment {
 
         // 后台线程命名，便于排查（NEW-L-11）
         new Thread(() -> {
-            var ok = testWithForm(snapshot);
+            var err = testWithForm(snapshot);
             if (getActivity() == null) return;
             getActivity().runOnUiThread(() -> {
                 testingPanel.setVisibility(View.GONE);
                 btnSave.setEnabled(true);
                 btnSave.setText(R.string.test_then_save);
-                if (ok) {
+                if (err == null) {
                     saveProfile(profileName, snapshot);
                     Toast.makeText(getActivity(), R.string.toast_profile_saved, Toast.LENGTH_SHORT).show();
                 } else {
-                    Toast.makeText(getActivity(), R.string.toast_profile_test_failed, Toast.LENGTH_LONG).show();
+                    // 连接失败：附带具体原因（如 SMB 共享文件夹不存在/无权限），帮助用户定位配置问题
+                    var hint = smbErrorLocalized(err);
+                    Toast.makeText(getActivity(),
+                            getString(R.string.toast_profile_test_failed) + (hint.isEmpty() ? "" : "\n" + hint),
+                            Toast.LENGTH_LONG).show();
                 }
             });
         }, "XpMiBackup-test-profile").start();
@@ -350,8 +362,8 @@ public class ServiceConfigFragment extends Fragment {
         Map<String, String> scriptVars;
     }
 
-    /** 用快照构造临时方案测试连接（后台线程调用）；记录开始/结果/耗时与主机参数（不含任何凭据） */
-    private boolean testWithForm(FormSnapshot snapshot) {
+    /** 用快照构造临时方案测试连接（后台线程调用）；记录开始/结果/耗时与主机参数（不含任何凭据）。返回 null=成功，否则为错误码（ERR_SMB_*） */
+    private String testWithForm(FormSnapshot snapshot) {
         var start = System.currentTimeMillis();
         LogHelp.i(TAG, "NAS test start: type=" + snapshot.type + " " + safeTestParams(snapshot.params));
         try {
@@ -367,13 +379,49 @@ public class ServiceConfigFragment extends Fragment {
             var ok = newProvider(snapshot.type, tmpProfile).testConnection();
             LogHelp.i(TAG, "NAS test " + (ok ? "OK" : "FAILED") + " type=" + snapshot.type
                     + " cost=" + (System.currentTimeMillis() - start) + "ms");
-            return ok;
+            return ok ? null : "ERR_UNKNOWN";
         } catch (Exception e) {
             LogHelp.e(TAG, "NAS test failed type=" + snapshot.type
                     + " cost=" + (System.currentTimeMillis() - start) + "ms", e);
-            return false;
+            return extractErrCode(e);
         } finally {
             EncryptedCredStore.removeAccount(TEST_KEY);
+        }
+    }
+
+    /** 从异常链提取 ERR_* 错误码（SMB 共享不存在/无权限等）；无则返回 null */
+    private static String extractErrCode(Throwable t) {
+        var cur = t;
+        while (cur != null) {
+            var m = cur.getMessage();
+            if (m != null) {
+                var i = m.indexOf("ERR_SMB_");
+                if (i >= 0) {
+                    var rest = m.substring(i + "ERR_SMB_".length());
+                    var end = 0;
+                    while (end < rest.length() && Character.isLetterOrDigit(rest.charAt(end))) end++;
+                    return "ERR_SMB_" + rest.substring(0, end);
+                }
+            }
+            cur = cur.getCause();
+        }
+        return null;
+    }
+
+    /** SMB 错误码 → 本地化提示（空串表示无具体原因，仅显示通用失败） */
+    private String smbErrorLocalized(String code) {
+        if (code == null) return "";
+        switch (code) {
+            case "ERR_SMB_SHARE_NOT_FOUND":
+                return getString(R.string.smb_err_share_not_found);
+            case "ERR_SMB_SHARE_NO_PERMISSION":
+                return getString(R.string.smb_err_share_no_permission);
+            case "ERR_SMB_REJECTED":
+                return getString(R.string.smb_err_rejected);
+            case "ERR_SMB_CONNECT":
+                return getString(R.string.smb_err_connect);
+            default:
+                return "";
         }
     }
 
@@ -484,6 +532,9 @@ public class ServiceConfigFragment extends Fragment {
         tabCustom.setTextColor(getResources().getColor(custom ? R.color.primary_text_on : R.color.text_disabled));
         // 「如何自定义脚本」链接仅自定义配置选项卡显示（NAS 选项卡无脚本上下文）
         tvScriptHelp.setVisibility(custom ? View.VISIBLE : View.GONE);
+        // 配置名称联动：自定义页标签/hint 改为脚本方案提示，NAS 页恢复通用（用户明确知道在命名哪类配置）
+        tvProfileNameLabel.setText(custom ? R.string.profile_name_custom : R.string.profile_name);
+        etProfileName.setHint(custom ? R.string.profile_name_hint_custom : R.string.profile_name_hint);
     }
 
     /** 按当前选项卡刷新下拉：选中该类型下当前激活方案（不在该类型则回退第一个） */
@@ -605,6 +656,22 @@ public class ServiceConfigFragment extends Fragment {
         ft.add(R.id.overlay_container, help);
         ft.addToBackStack("script-help");
         ft.commit();
+    }
+
+    /** 打开外部链接：仅允许 http/https，防 intent injection（MED-15） */
+    private void openUrl(String url) {
+        if (url == null) return;
+        try {
+            var uri = android.net.Uri.parse(url);
+            var scheme = uri.getScheme();
+            if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                LogHelp.w(TAG, "blocked non-http(s) url: " + url);
+                return;
+            }
+            startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, uri));
+        } catch (Exception e) {
+            LogHelp.e(TAG, "open url failed: " + url, e);
+        }
     }
 
     private static String encodeScript(String script) {

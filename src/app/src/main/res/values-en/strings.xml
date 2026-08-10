@@ -5,7 +5,9 @@
     <string name="xposed_description">Cloud Backup Assistant - back up to your own cloud storage device</string>
     <string name="author">zgcwkj</string>
     <string name="author_url">http://www.zgcwkj.cn</string>
-    <string name="footer_text">Powered by <a href="http://www.zgcwkj.cn">zgcwkj</a></string>
+    <string name="footer_text">Powered by</string>
+    <string name="footer_suileyan"> · suileyan</string>
+    <string name="suileyan_url">https://github.com/suileyan</string>
 
     <string name="action_backup">Backup</string>
     <string name="settings_title">Settings</string>
@@ -48,12 +50,18 @@
 
     <string name="profile_name">Profile name</string>
     <string name="profile_name_hint">Example: Home NAS</string>
+    <string name="profile_name_custom">Custom profile name</string>
+    <string name="profile_name_hint_custom">Example: My script profile</string>
     <!-- Unsaved profile default name: hints users can name and save it as one of multiple profiles (NAS config page) -->
     <string name="profile_unsaved_name">New Config</string>
     <string name="test_then_save">Test then save</string>
     <string name="toast_profile_name_required">Please enter a profile name.</string>
     <string name="toast_profile_saved">Profile saved and activated.</string>
     <string name="toast_profile_test_failed">Connection failed. Not saved.</string>
+    <string name="smb_err_share_not_found">Share folder not found or wrong name. Check the "Share folder" field (e.g. public)</string>
+    <string name="smb_err_share_no_permission">Share folder exists but access is denied. Make sure your account has read access</string>
+    <string name="smb_err_rejected">SMB server rejected the request. Check the server configuration</string>
+    <string name="smb_err_connect">SMB connection failed. Check server address, port, account credentials and network</string>
 
     <string name="backup_method">Backup method</string>
     <string name="backup_method_nas">NAS backup</string>
@@ -173,7 +181,7 @@
     <string name="desc_chunk_size">Split uploads into chunks of this size; 0 disables chunking</string>
     <string name="desc_smb_server">IP address or hostname of the NAS</string>
     <string name="desc_smb_port">SMB port, default 445</string>
-    <string name="desc_share_folder">Shared folder name on the NAS, without path separators</string>
+    <string name="desc_share_folder">Share name set on the server (e.g. public, mivideo); it becomes the root after login. In multi-share setups use the one your account can access, without path separators</string>
     <string name="desc_username">Login account for the NAS; leave empty for anonymous access</string>
     <string name="desc_password">Password for the username above</string>
     <string name="desc_webdav_url">Full WebDAV URL; HTTPS is required</string>
