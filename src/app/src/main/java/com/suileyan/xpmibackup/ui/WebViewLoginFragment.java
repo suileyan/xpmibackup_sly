@@ -47,6 +47,7 @@ public class WebViewLoginFragment extends Fragment {
     public static final String PROVIDER_123 = "123";
     public static final String PROVIDER_189 = "189";
     public static final String PROVIDER_BAIDU = "baidu";
+    public static final String PROVIDER_115 = "115";
     public static final String ARG_PROVIDER = "provider";
 
     /** 139 云盘登录页 */
@@ -61,6 +62,8 @@ public class WebViewLoginFragment extends Fragment {
     private static final String URL_189 = "https://cloud.189.cn/";
     /** 百度网盘登录页 */
     private static final String URL_BAIDU = "https://pan.baidu.com/";
+    /** 115 网盘登录页 */
+    private static final String URL_115 = "https://115.com/";
 
     /** 桌面版 User-Agent（电脑模式） */
     private static final String DESKTOP_UA =
@@ -175,6 +178,8 @@ public class WebViewLoginFragment extends Fragment {
                 tvTitle.setText(R.string.title_webview_login_189);
             } else if (PROVIDER_BAIDU.equals(provider)) {
                 tvTitle.setText(R.string.title_webview_login_baidu);
+            } else if (PROVIDER_115.equals(provider)) {
+                tvTitle.setText(R.string.title_webview_login_115);
             } else {
                 tvTitle.setText(R.string.title_webview_login);
             }
@@ -258,6 +263,14 @@ public class WebViewLoginFragment extends Fragment {
                     // 百度登录页同为 SPA，同样预注入桌面模式
                     if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
                             && isBaiduHost(request.getUrl().getHost())
+                            && isHtmlPage(request.getUrl().toString())) {
+                        var injected = fetchAndInjectDesktop(request.getUrl().toString());
+                        if (injected != null) return injected;
+                    }
+                } else if (PROVIDER_115.equals(provider)) {
+                    // 115 登录页同为 SPA，预注入桌面模式
+                    if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
+                            && is115Host(request.getUrl().getHost())
                             && isHtmlPage(request.getUrl().toString())) {
                         var injected = fetchAndInjectDesktop(request.getUrl().toString());
                         if (injected != null) return injected;
@@ -349,6 +362,10 @@ public class WebViewLoginFragment extends Fragment {
                     // 百度：登录态在 Cookie（含 BDUSS），点「完成」时合并读取保存
                     var bdck = captureBaiduCookie();
                     LogHelp.d(TAG, "百度网盘 Cookie 就绪: len=" + (bdck != null ? bdck.length() : 0));
+                } else if (PROVIDER_115.equals(provider)) {
+                    // 115：登录态在 Cookie（UID/CID/SEID/KID），点「完成」时合并读取保存
+                    var ck115 = capture115Cookie();
+                    LogHelp.d(TAG, "115 网盘 Cookie 就绪: len=" + (ck115 != null ? ck115.length() : 0));
                 } else {
                     view.evaluateJavascript(EXTRACT_JS_139, value -> {
                         if (value != null && value.toLowerCase().contains("basic")) {
@@ -370,7 +387,8 @@ public class WebViewLoginFragment extends Fragment {
                 : PROVIDER_QUARK.equals(provider) ? URL_QUARK
                 : PROVIDER_123.equals(provider) ? URL_123
                 : PROVIDER_189.equals(provider) ? URL_189
-                : PROVIDER_BAIDU.equals(provider) ? URL_BAIDU : URL_139);
+                : PROVIDER_BAIDU.equals(provider) ? URL_BAIDU
+                : PROVIDER_115.equals(provider) ? URL_115 : URL_139);
 
         // 返回键：优先让 WebView 后退
         view.setFocusableInTouchMode(true);
@@ -588,6 +606,8 @@ public class WebViewLoginFragment extends Fragment {
             onDone189();
         } else if (PROVIDER_BAIDU.equals(provider)) {
             onDoneBaidu();
+        } else if (PROVIDER_115.equals(provider)) {
+            onDone115();
         } else {
             onDone139();
         }
@@ -908,6 +928,116 @@ public class WebViewLoginFragment extends Fragment {
             finishSave();
         } catch (Exception e) {
             LogHelp.e(TAG, "save 百度 account failed", e);
+            Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 严格判断主机名是否属于 115 网盘（115.com / www.115.com / passport.115.com / anq.115.com，防相似域名） */
+    private static boolean is115Host(String host) {
+        if (host == null) return false;
+        var h = host.toLowerCase(java.util.Locale.ROOT);
+        return h.equals("115.com") || h.endsWith(".115.com")
+                && (h.equals("www.115.com") || h.equals("passport.115.com")
+                || h.equals("anq.115.com") || h.endsWith(".www.115.com")
+                || h.endsWith(".passport.115.com") || h.endsWith(".anq.115.com"));
+    }
+
+    /**
+     * 捕获 115 登录 Cookie（按 cookie 名去重合并，仿 captureBaiduCookie），
+     * 覆盖 115.com 与 passport.115.com 两个域；登录态核心为 UID
+     */
+    private String capture115Cookie() {
+        var sb = new StringBuilder();
+        var seen = new java.util.HashSet<String>();
+        for (var base : new String[]{"https://115.com/", "https://www.115.com/", "https://passport.115.com/"}) {
+            var ck = CookieManager.getInstance().getCookie(base);
+            if (ck == null) continue;
+            for (var pair : ck.split(";")) {
+                var p = pair.trim();
+                if (p.isEmpty()) continue;
+                var name = p.split("=", 2)[0];
+                if (seen.add(name)) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(p);
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 115「完成」：捕获 Cookie（必须含 UID）后台验证通过后保存
+     * 幂等复用已存在 115 账号 id
+     */
+    private void onDone115() {
+        var ck = capture115Cookie();
+        if (ck == null || ck.isEmpty()) {
+            Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+            return;
+        }
+        // UID 是 115 登录核心凭据，缺失视为未完成登录
+        if (!containsCookie(ck, "UID")) {
+            Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+            return;
+        }
+        LogHelp.i(TAG, "115 Cookie 捕获: len=" + ck.length());
+        btnDone.setEnabled(false);
+        btnDone.setText(R.string.testing_connection);
+        var id = "115_" + System.currentTimeMillis();
+        // 幂等：复用已存在 115 账号 id，避免重复保存出现多个账号
+        var existing = CloudAccountStore.list().stream()
+                .filter(a -> CloudAccount.PROVIDER_115.equals(a.provider))
+                .findFirst().orElse(null);
+        if (existing != null) id = existing.id;
+        var accountId = id;
+        // 幂等复用场景：先备份旧 Cookie，验证失败时恢复而非删除账号（避免误删旧有效凭据，HIGH-01）
+        final var prevCk = existing != null ? EncryptedCredStore.get(accountId, "cookie") : null;
+        new Thread(() -> {
+            try {
+                // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
+                EncryptedCredStore.put(accountId, "cookie", ck);
+                var provider = com.suileyan.cloud.ProviderRegistry.forAccount(
+                        new CloudAccount(accountId, CloudAccount.PROVIDER_115, "", "", System.currentTimeMillis()));
+                var ok = provider != null && provider.testConnection();
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(() -> {
+                    btnDone.setEnabled(true);
+                    btnDone.setText(R.string.webview_login_done);
+                    if (ok) {
+                        saveAccount115(accountId);
+                    } else {
+                        // 验证失败：恢复旧凭据（若原本无账号则删除临时凭据），提示登录可能未完成
+                        if (prevCk != null && !prevCk.isEmpty()) {
+                            EncryptedCredStore.put(accountId, "cookie", prevCk);
+                            LogHelp.w(TAG, "115 验证失败，已恢复旧 Cookie: " + accountId);
+                        } else {
+                            EncryptedCredStore.removeAccount(accountId);
+                        }
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                LogHelp.e(TAG, "115 验证失败", e);
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        btnDone.setEnabled(true);
+                        btnDone.setText(R.string.webview_login_done);
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    });
+                }
+            }
+        }, "XpMiBackup-115-validate").start();
+    }
+
+    /** 保存 115 账号（uid 留空串，列表显示「115网盘」） */
+    private void saveAccount115(String id) {
+        try {
+            CloudAccountStore.add(new CloudAccount(id, CloudAccount.PROVIDER_115, "",
+                    getString(R.string.cloud_provider_115), System.currentTimeMillis()));
+            LogHelp.i(TAG, "115 账号已保存: " + id);
+            finishSave();
+        } catch (Exception e) {
+            LogHelp.e(TAG, "save 115 account failed", e);
             Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
         }
     }
