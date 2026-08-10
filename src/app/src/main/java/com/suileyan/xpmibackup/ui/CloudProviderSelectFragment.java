@@ -53,6 +53,10 @@ public class CloudProviderSelectFragment extends Fragment {
                 getString(R.string.cloud_provider_wo),
                 getString(R.string.cloud_provider_wo_hint),
                 v -> openLogin(WebViewLoginFragment.PROVIDER_WO)));
+        list.addView(createProviderRow(R.drawable.ic_tab_cloud,
+                getString(R.string.cloud_provider_115),
+                getString(R.string.cloud_provider_115_hint),
+                v -> openLogin(WebViewLoginFragment.PROVIDER_115)));
         return view;
     }
 

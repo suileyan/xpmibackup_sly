@@ -162,6 +162,9 @@
     <string name="cloud_provider_wo">联通沃盘</string>
     <string name="cloud_provider_wo_hint">应用内网页登录</string>
     <string name="title_webview_login_wo">登录联通沃盘</string>
+    <string name="cloud_provider_115">115网盘</string>
+    <string name="cloud_provider_115_hint">应用内网页登录</string>
+    <string name="title_webview_login_115">登录 115 网盘</string>
     <string name="title_webview_login_quark">登录夸克云盘</string>
     <string name="title_webview_login">登录 139 云盘</string>
     <string name="title_webview_login_guangya">登录光鸭云盘</string>
