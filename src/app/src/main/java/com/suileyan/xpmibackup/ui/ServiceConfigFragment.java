@@ -134,8 +134,8 @@ public class ServiceConfigFragment extends Fragment {
         if (active != null) {
             applyProfileToForm(active);
         } else {
-            // 无方案：默认 SMB 空白表单
-            etProfileName.setText("");
+            // 无方案（当前为未保存的配置）：命名自动为「新配置」，引导用户可命名并保存为多套配置之一
+            etProfileName.setText(R.string.profile_unsaved_name);
             rbSmb.setChecked(true);
             showProtocolPanel(R.id.rb_smb);
         }
@@ -148,6 +148,10 @@ public class ServiceConfigFragment extends Fragment {
         var names = new ArrayList<String>();
         for (var p : profiles) {
             names.add(p.name != null && !p.name.isEmpty() ? p.name : typeLabel(p.type));
+        }
+        if (names.isEmpty()) {
+            // 无任何已保存方案：下拉显示「新配置」占位，与命名区一致，引导多配置管理
+            names.add(getString(R.string.profile_unsaved_name));
         }
         var adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item, names);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -243,6 +247,13 @@ public class ServiceConfigFragment extends Fragment {
             Toast.makeText(getActivity(), R.string.toast_profile_name_required, Toast.LENGTH_SHORT).show();
             return;
         }
+        // 未保存配置的默认命名「新配置」：同名已存在时自动追加序号（新配置 2/3/…），
+        // 避免覆盖已有方案，引导用户保存多套配置
+        var savedName = name;
+        if (savedName.equals(getString(R.string.profile_unsaved_name))) {
+            savedName = uniqueProfileName(savedName, editingProfileId);
+        }
+        final var profileName = savedName;
         btnSave.setEnabled(false);
         btnSave.setText(R.string.testing_connection);
         testingPanel.setVisibility(View.VISIBLE);
@@ -264,7 +275,7 @@ public class ServiceConfigFragment extends Fragment {
                 btnSave.setEnabled(true);
                 btnSave.setText(R.string.test_then_save);
                 if (ok) {
-                    saveProfile(name, snapshot);
+                    saveProfile(profileName, snapshot);
                     Toast.makeText(getActivity(), R.string.toast_profile_saved, Toast.LENGTH_SHORT).show();
                 } else {
                     Toast.makeText(getActivity(), R.string.toast_profile_test_failed, Toast.LENGTH_LONG).show();
@@ -316,6 +327,35 @@ public class ServiceConfigFragment extends Fragment {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * 默认「新配置」名唯一化：同名（排除当前编辑 id）已存在时追加序号（新配置 2/3/…），
+     * 避免未命名保存覆盖已有方案，体现多配置管理能力
+     */
+    private static String uniqueProfileName(String name, String excludeId) {
+        var profiles = ProfileStore.list();
+        var taken = false;
+        for (var p : profiles) {
+            if (p.id.equals(excludeId)) continue;
+            if (name.equals(p.name)) {
+                taken = true;
+                break;
+            }
+        }
+        if (!taken) return name;
+        for (var i = 2; ; i++) {
+            var candidate = name + " " + i;
+            var dup = false;
+            for (var p : profiles) {
+                if (p.id.equals(excludeId)) continue;
+                if (candidate.equals(p.name)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) return candidate;
+        }
     }
 
     /**

@@ -90,6 +90,8 @@
 
     <string name="profile_name">配置名称</string>
     <string name="profile_name_hint">例: 家庭NAS</string>
+    <!-- 未保存配置时的默认命名：提示用户可命名并保存为多套配置之一（NAS 配置页） -->
+    <string name="profile_unsaved_name">新配置</string>
     <string name="test_then_save">测试通过后保存</string>
     <string name="toast_profile_name_required">请输入配置名称</string>
     <string name="toast_profile_saved">方案已保存并激活</string>

@@ -48,6 +48,8 @@
 
     <string name="profile_name">Profile name</string>
     <string name="profile_name_hint">Example: Home NAS</string>
+    <!-- Unsaved profile default name: hints users can name and save it as one of multiple profiles (NAS config page) -->
+    <string name="profile_unsaved_name">New Config</string>
     <string name="test_then_save">Test then save</string>
     <string name="toast_profile_name_required">Please enter a profile name.</string>
     <string name="toast_profile_saved">Profile saved and activated.</string>
