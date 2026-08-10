@@ -45,6 +45,8 @@ public class WebViewLoginFragment extends Fragment {
     public static final String PROVIDER_GUANGYA = "guangya";
     public static final String PROVIDER_QUARK = "quark";
     public static final String PROVIDER_123 = "123";
+    public static final String PROVIDER_189 = "189";
+    public static final String PROVIDER_BAIDU = "baidu";
     public static final String ARG_PROVIDER = "provider";
 
     /** 139 云盘登录页 */
@@ -55,6 +57,10 @@ public class WebViewLoginFragment extends Fragment {
     private static final String URL_QUARK = "https://pan.quark.cn/";
     /** 123云盘登录页 */
     private static final String URL_123 = "https://www.123pan.com/";
+    /** 天翼云盘登录页 */
+    private static final String URL_189 = "https://cloud.189.cn/";
+    /** 百度网盘登录页 */
+    private static final String URL_BAIDU = "https://pan.baidu.com/";
 
     /** 桌面版 User-Agent（电脑模式） */
     private static final String DESKTOP_UA =
@@ -165,6 +171,10 @@ public class WebViewLoginFragment extends Fragment {
                 tvTitle.setText(R.string.title_webview_login_quark);
             } else if (PROVIDER_123.equals(provider)) {
                 tvTitle.setText(R.string.title_webview_login_123);
+            } else if (PROVIDER_189.equals(provider)) {
+                tvTitle.setText(R.string.title_webview_login_189);
+            } else if (PROVIDER_BAIDU.equals(provider)) {
+                tvTitle.setText(R.string.title_webview_login_baidu);
             } else {
                 tvTitle.setText(R.string.title_webview_login);
             }
@@ -232,6 +242,22 @@ public class WebViewLoginFragment extends Fragment {
                     // 123云盘登录页同为 SPA，同样预注入桌面模式
                     if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
                             && isPan123Host(request.getUrl().getHost())
+                            && isHtmlPage(request.getUrl().toString())) {
+                        var injected = fetchAndInjectDesktop(request.getUrl().toString());
+                        if (injected != null) return injected;
+                    }
+                } else if (PROVIDER_189.equals(provider)) {
+                    // 天翼登录页同为 SPA，同样预注入桌面模式
+                    if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
+                            && is189Host(request.getUrl().getHost())
+                            && isHtmlPage(request.getUrl().toString())) {
+                        var injected = fetchAndInjectDesktop(request.getUrl().toString());
+                        if (injected != null) return injected;
+                    }
+                } else if (PROVIDER_BAIDU.equals(provider)) {
+                    // 百度登录页同为 SPA，同样预注入桌面模式
+                    if (request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
+                            && isBaiduHost(request.getUrl().getHost())
                             && isHtmlPage(request.getUrl().toString())) {
                         var injected = fetchAndInjectDesktop(request.getUrl().toString());
                         if (injected != null) return injected;
@@ -315,6 +341,14 @@ public class WebViewLoginFragment extends Fragment {
                             }
                         }
                     });
+                } else if (PROVIDER_189.equals(provider)) {
+                    // 天翼：登录态在 SSON Cookie（可能跨多个域），点「完成」时合并读取保存
+                    var sson = capture189Cookie();
+                    LogHelp.d(TAG, "天翼 SSON 就绪: len=" + (sson != null ? sson.length() : 0));
+                } else if (PROVIDER_BAIDU.equals(provider)) {
+                    // 百度：登录态在 Cookie（含 BDUSS），点「完成」时合并读取保存
+                    var bdck = captureBaiduCookie();
+                    LogHelp.d(TAG, "百度网盘 Cookie 就绪: len=" + (bdck != null ? bdck.length() : 0));
                 } else {
                     view.evaluateJavascript(EXTRACT_JS_139, value -> {
                         if (value != null && value.toLowerCase().contains("basic")) {
@@ -334,7 +368,9 @@ public class WebViewLoginFragment extends Fragment {
 
         webView.loadUrl(PROVIDER_GUANGYA.equals(provider) ? URL_GUANGYA
                 : PROVIDER_QUARK.equals(provider) ? URL_QUARK
-                : PROVIDER_123.equals(provider) ? URL_123 : URL_139);
+                : PROVIDER_123.equals(provider) ? URL_123
+                : PROVIDER_189.equals(provider) ? URL_189
+                : PROVIDER_BAIDU.equals(provider) ? URL_BAIDU : URL_139);
 
         // 返回键：优先让 WebView 后退
         view.setFocusableInTouchMode(true);
@@ -548,6 +584,10 @@ public class WebViewLoginFragment extends Fragment {
             onDoneQuark();
         } else if (PROVIDER_123.equals(provider)) {
             onDone123();
+        } else if (PROVIDER_189.equals(provider)) {
+            onDone189();
+        } else if (PROVIDER_BAIDU.equals(provider)) {
+            onDoneBaidu();
         } else {
             onDone139();
         }
@@ -639,6 +679,39 @@ public class WebViewLoginFragment extends Fragment {
         return sb.toString();
     }
 
+    /**
+     * 捕获天翼 SSON Cookie（登录态可能落在 cloud.189.cn / open.e.189.cn / api.cloud.189.cn，
+     * 仅提取名为 SSON 的键值，取最长者）
+     */
+    private String capture189Cookie() {
+        String best = "";
+        for (var base : new String[]{
+                "https://cloud.189.cn/",
+                "https://open.e.189.cn/",
+                "https://api.cloud.189.cn/"}) {
+            var ck = CookieManager.getInstance().getCookie(base);
+            if (ck == null) continue;
+            for (var pair : ck.split(";")) {
+                var p = pair.trim();
+                var eq = p.indexOf('=');
+                if (eq <= 0) continue;
+                if ("SSON".equals(p.substring(0, eq))) {
+                    var value = p.substring(eq + 1);
+                    if (value.length() > best.length()) best = value;
+                }
+            }
+        }
+        return best;
+    }
+
+    /** 严格判断主机名是否属于天翼云盘（cloud.189.cn / open.e.189.cn，防相似域名，HIGH-18 风格） */
+    private static boolean is189Host(String host) {
+        if (host == null) return false;
+        var h = host.toLowerCase(java.util.Locale.ROOT);
+        return h.equals("cloud.189.cn") || h.endsWith(".cloud.189.cn")
+                || h.equals("open.e.189.cn") || h.endsWith(".open.e.189.cn");
+    }
+
     /** 保存夸克账号（Cookie 已在后台验证通过） */
     private void saveAccountQuark(String id, String cookie) {
         try {
@@ -651,6 +724,202 @@ public class WebViewLoginFragment extends Fragment {
             LogHelp.e(TAG, "save 夸克 account failed", e);
             Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
         }
+    }
+
+    /**
+     * 天翼云盘「完成」：捕获 SSON Cookie 后台验证通过后保存
+     * 幂等复用已存在天翼账号 id
+     */
+    private void onDone189() {
+        var sson = capture189Cookie();
+        if (sson == null || sson.isEmpty()) {
+            Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+            return;
+        }
+        LogHelp.i(TAG, "天翼 SSON 捕获: len=" + sson.length());
+        btnDone.setEnabled(false);
+        btnDone.setText(R.string.testing_connection);
+        var id = "189_" + System.currentTimeMillis();
+        // 幂等：复用已存在天翼账号 id，避免重复保存出现多个账号
+        var existing = CloudAccountStore.list().stream()
+                .filter(a -> CloudAccount.PROVIDER_189.equals(a.provider))
+                .findFirst().orElse(null);
+        if (existing != null) id = existing.id;
+        var accountId = id;
+        // 幂等复用场景：先备份旧 SSON，验证失败时恢复而非删除账号（避免误删旧有效凭据，HIGH-01）
+        final var prevSson = existing != null ? EncryptedCredStore.get(accountId, "sson_cookie") : null;
+        new Thread(() -> {
+            try {
+                // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
+                EncryptedCredStore.put(accountId, "sson_cookie", sson);
+                var provider = com.suileyan.cloud.ProviderRegistry.forAccount(
+                        new CloudAccount(accountId, CloudAccount.PROVIDER_189, "", "", System.currentTimeMillis()));
+                var ok = provider != null && provider.testConnection();
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(() -> {
+                    btnDone.setEnabled(true);
+                    btnDone.setText(R.string.webview_login_done);
+                    if (ok) {
+                        saveAccount189(accountId);
+                    } else {
+                        // 验证失败：恢复旧凭据（若原本无账号则删除临时凭据），提示登录可能未完成
+                        if (prevSson != null && !prevSson.isEmpty()) {
+                            EncryptedCredStore.put(accountId, "sson_cookie", prevSson);
+                            LogHelp.w(TAG, "天翼验证失败，已恢复旧 SSON: " + accountId);
+                        } else {
+                            EncryptedCredStore.removeAccount(accountId);
+                        }
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                LogHelp.e(TAG, "天翼验证失败", e);
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        btnDone.setEnabled(true);
+                        btnDone.setText(R.string.webview_login_done);
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    });
+                }
+            }
+        }, "XpMiBackup-189-validate").start();
+    }
+
+    /** 保存天翼账号（testConnection 已把 access_token/refresh_token/session_key 持久化；uid 取 login_name 或 JWT 解码） */
+    private void saveAccount189(String id) {
+        try {
+            var uid = EncryptedCredStore.get(id, "login_name");
+            if (uid == null || uid.isEmpty()) {
+                uid = com.suileyan.cloud.AccountDisplay.decodeUid(EncryptedCredStore.get(id, "access_token"));
+            }
+            if (uid == null) uid = "";
+            CloudAccountStore.add(new CloudAccount(id, CloudAccount.PROVIDER_189, uid,
+                    getString(R.string.cloud_provider_189), System.currentTimeMillis()));
+            // uid 为登录名（手机号/邮箱），日志只记长度不记明文
+            LogHelp.i(TAG, "天翼账号已保存: " + id + " uidLen=" + (uid != null ? uid.length() : 0));
+            finishSave();
+        } catch (Exception e) {
+            LogHelp.e(TAG, "save 天翼 account failed", e);
+            Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 严格判断主机名是否属于百度网盘（pan.baidu.com / passport.baidu.com，防相似域名，HIGH-18 风格） */
+    private static boolean isBaiduHost(String host) {
+        if (host == null) return false;
+        var h = host.toLowerCase(java.util.Locale.ROOT);
+        return h.equals("pan.baidu.com") || h.endsWith(".pan.baidu.com")
+                || h.equals("passport.baidu.com") || h.endsWith(".passport.baidu.com");
+    }
+
+    /**
+     * 捕获百度登录 Cookie（按 cookie 名去重合并，仿 captureQuarkCookie），
+     * 覆盖 pan.baidu.com 与 passport.baidu.com 两个域；登录态核心为 BDUSS
+     */
+    private String captureBaiduCookie() {
+        var sb = new StringBuilder();
+        var seen = new java.util.HashSet<String>();
+        for (var base : new String[]{"https://pan.baidu.com/", "https://passport.baidu.com/"}) {
+            var ck = CookieManager.getInstance().getCookie(base);
+            if (ck == null) continue;
+            for (var pair : ck.split(";")) {
+                var p = pair.trim();
+                if (p.isEmpty()) continue;
+                var name = p.split("=", 2)[0];
+                if (seen.add(name)) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(p);
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 百度「完成」：捕获 Cookie（必须含 BDUSS）后台验证通过后保存
+     * 幂等复用已存在百度账号 id
+     */
+    private void onDoneBaidu() {
+        var ck = captureBaiduCookie();
+        if (ck == null || ck.isEmpty()) {
+            Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+            return;
+        }
+        // BDUSS 是 xpan 认证核心，缺失视为未完成登录
+        if (!containsCookie(ck, "BDUSS")) {
+            Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+            return;
+        }
+        LogHelp.i(TAG, "百度 Cookie 捕获: len=" + ck.length());
+        btnDone.setEnabled(false);
+        btnDone.setText(R.string.testing_connection);
+        var id = "baidu_" + System.currentTimeMillis();
+        // 幂等：复用已存在百度账号 id，避免重复保存出现多个账号
+        var existing = CloudAccountStore.list().stream()
+                .filter(a -> CloudAccount.PROVIDER_BAIDU.equals(a.provider))
+                .findFirst().orElse(null);
+        if (existing != null) id = existing.id;
+        var accountId = id;
+        // 幂等复用场景：先备份旧 Cookie，验证失败时恢复而非删除账号（避免误删旧有效凭据，HIGH-01）
+        final var prevCk = existing != null ? EncryptedCredStore.get(accountId, "cookie") : null;
+        new Thread(() -> {
+            try {
+                // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
+                EncryptedCredStore.put(accountId, "cookie", ck);
+                var provider = com.suileyan.cloud.ProviderRegistry.forAccount(
+                        new CloudAccount(accountId, CloudAccount.PROVIDER_BAIDU, "", "", System.currentTimeMillis()));
+                var ok = provider != null && provider.testConnection();
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(() -> {
+                    btnDone.setEnabled(true);
+                    btnDone.setText(R.string.webview_login_done);
+                    if (ok) {
+                        saveAccountBaidu(accountId);
+                    } else {
+                        // 验证失败：恢复旧凭据（若原本无账号则删除临时凭据），提示登录可能未完成
+                        if (prevCk != null && !prevCk.isEmpty()) {
+                            EncryptedCredStore.put(accountId, "cookie", prevCk);
+                            LogHelp.w(TAG, "百度验证失败，已恢复旧 Cookie: " + accountId);
+                        } else {
+                            EncryptedCredStore.removeAccount(accountId);
+                        }
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                LogHelp.e(TAG, "百度验证失败", e);
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        btnDone.setEnabled(true);
+                        btnDone.setText(R.string.webview_login_done);
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    });
+                }
+            }
+        }, "XpMiBackup-baidu-validate").start();
+    }
+
+    /** 保存百度账号（uid 留空串，列表显示「百度网盘」） */
+    private void saveAccountBaidu(String id) {
+        try {
+            CloudAccountStore.add(new CloudAccount(id, CloudAccount.PROVIDER_BAIDU, "",
+                    getString(R.string.cloud_provider_baidu), System.currentTimeMillis()));
+            LogHelp.i(TAG, "百度账号已保存: " + id);
+            finishSave();
+        } catch (Exception e) {
+            LogHelp.e(TAG, "save 百度 account failed", e);
+            Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 判断 cookie 串中是否含指定键名（如 BDUSS） */
+    private static boolean containsCookie(String cookieStr, String name) {
+        if (cookieStr == null || name == null) return false;
+        for (var pair : cookieStr.split(";")) {
+            var t = pair.trim();
+            if (!t.isEmpty() && t.split("=", 2)[0].equals(name)) return true;
+        }
+        return false;
     }
 
     /**

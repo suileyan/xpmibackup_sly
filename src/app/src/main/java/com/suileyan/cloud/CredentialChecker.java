@@ -82,6 +82,12 @@ public final class CredentialChecker {
                 && EncryptedCredStore.get(account.id, "refresh_token").isEmpty()) {
             return Status.WEAK;
         }
+        // 天翼：refresh_token 与 SSON 同时缺失才无法续期（任一存在都能自动换会话）
+        if (CloudAccount.PROVIDER_189.equals(account.provider)
+                && EncryptedCredStore.get(account.id, "refresh_token").isEmpty()
+                && EncryptedCredStore.get(account.id, "sson_cookie").isEmpty()) {
+            return Status.WEAK;
+        }
         return Status.VALID;
     }
 

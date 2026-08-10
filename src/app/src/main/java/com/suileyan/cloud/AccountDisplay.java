@@ -75,6 +75,8 @@ public final class AccountDisplay {
         if (CloudAccount.PROVIDER_GUANGYA.equals(provider)) return "光鸭云盘";
         if (CloudAccount.PROVIDER_QUARK.equals(provider)) return "夸克云盘";
         if (CloudAccount.PROVIDER_123.equals(provider)) return "123云盘";
+        if (CloudAccount.PROVIDER_189.equals(provider)) return "天翼云盘";
+        if (CloudAccount.PROVIDER_BAIDU.equals(provider)) return "百度网盘";
         return provider == null ? "" : provider;
     }
 

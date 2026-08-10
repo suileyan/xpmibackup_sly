@@ -111,6 +111,12 @@
     <string name="cloud_provider_123">123 Cloud Drive</string>
     <string name="cloud_provider_123_hint">In-app web login</string>
     <string name="title_webview_login_123">Log in to 123 Cloud Drive</string>
+    <string name="cloud_provider_189">Tianyi Cloud (189)</string>
+    <string name="cloud_provider_189_hint">In-app web login</string>
+    <string name="title_webview_login_189">Log in to Tianyi Cloud Drive</string>
+    <string name="cloud_provider_baidu">Baidu Netdisk</string>
+    <string name="cloud_provider_baidu_hint">In-app web login</string>
+    <string name="title_webview_login_baidu">Log in to Baidu Netdisk</string>
     <string name="title_webview_login_quark">Log in to Quark Drive</string>
     <string name="webview_login_done">Done</string>
     <string name="webview_login_tip">Log in on the page, then tap "Done" in the top-right corner.</string>
