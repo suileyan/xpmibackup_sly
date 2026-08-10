@@ -995,7 +995,8 @@ public class WebViewLoginFragment extends Fragment {
         for (var entry : headers.entrySet()) {
             var name = entry.getKey() == null ? "" : entry.getKey().toLowerCase(java.util.Locale.ROOT);
             var value = entry.getValue() == null ? "" : entry.getValue().trim();
-            if (name.equals("accesstoken") && !value.isEmpty() && value.length() > capturedWoToken.length()) {
+            // 内容不同即更新：沃盘 token 固定 UUID 36 位，按长度比较会漏掉「等长但已轮换」的新 token
+            if (name.equals("accesstoken") && !value.isEmpty() && !value.equals(capturedWoToken)) {
                 capturedWoToken = value;
                 LogHelp.i(TAG, "captured 沃盘 Accesstoken from request, host=" + host + " len=" + value.length());
             }
@@ -1003,15 +1004,64 @@ public class WebViewLoginFragment extends Fragment {
     }
 
     /**
-     * 沃盘「完成」：token 为空则提示；后台 testConnection 通过后保存（幂等复用已存在沃盘账号 id）。
-     * 验证失败恢复旧 access_token（幂等复用场景，避免误删旧有效凭据，HIGH-01）
+     * 沃盘「完成」：token 为空则现场重扫 localStorage（防「登录后才出现 dispatcher 请求」时序，仿 123）；
+     * 有 token 则后台验证，验证失败再重扫一次（捕获的可能是登录前/中间态 token）
      */
     private void onDoneWo() {
         var token = capturedWoToken;
         if (token.isEmpty()) {
-            Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+            rescrapeWoAndValidate(null, null, null);
             return;
         }
+        validateWo(token, false);
+    }
+
+    /**
+     * 现场重扫 localStorage 提取最新 access_token 后验证（token 为空或验证失败时兜底）。
+     * accountId/prevAt 为验证失败重扫场景的 HIGH-01 回滚上下文：重扫仍无新 token 时
+     * 恢复按钮并回滚临时凭据（有旧值恢复旧值，无旧值删账号），避免失败 token 残留
+     */
+    private void rescrapeWoAndValidate(String prevToken, String accountId, String prevAt) {
+        webView.evaluateJavascript(EXTRACT_JS_WO, value -> {
+            if (value != null && value.contains("|||")) {
+                var cleaned = value.replace("\"", "");
+                var parts = cleaned.split("\\|\\|\\|");
+                if (parts.length >= 2) {
+                    var at = parts[0].trim();
+                    if (!at.isEmpty() && !at.equals(prevToken)) {
+                        capturedWoToken = at;
+                        LogHelp.i(TAG, "沃盘 localStorage 重扫提取到 access_token, len=" + at.length());
+                        validateWo(at, false);
+                        return;
+                    }
+                }
+            }
+            if (getActivity() == null) return;
+            getActivity().runOnUiThread(() -> {
+                btnDone.setEnabled(true);
+                btnDone.setText(R.string.webview_login_done);
+                if (accountId != null) {
+                    rollbackWoCredential(accountId, prevAt);
+                    LogHelp.w(TAG, "沃盘重扫无新 token，已回滚临时凭据: " + accountId);
+                }
+                Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+            });
+        });
+    }
+
+    /** HIGH-01 回滚：验证失败恢复旧 access_token；原本无账号则删除临时凭据 */
+    private void rollbackWoCredential(String accountId, String prevAt) {
+        if (prevAt != null && !prevAt.isEmpty()) {
+            EncryptedCredStore.put(accountId, "access_token", prevAt);
+            LogHelp.w(TAG, "沃盘验证失败，已恢复旧 access_token: " + accountId);
+        } else {
+            EncryptedCredStore.removeAccount(accountId);
+            LogHelp.w(TAG, "沃盘验证失败，已删除临时凭据: " + accountId);
+        }
+    }
+
+    /** 沃盘后台验证并保存/恢复（幂等复用已存在账号 id；验证失败恢复旧凭据而非删除，HIGH-01） */
+    private void validateWo(String token, boolean retried) {
         LogHelp.i(TAG, "沃盘 token 捕获: len=" + token.length());
         btnDone.setEnabled(false);
         btnDone.setText(R.string.testing_connection);
@@ -1037,13 +1087,12 @@ public class WebViewLoginFragment extends Fragment {
                     btnDone.setText(R.string.webview_login_done);
                     if (ok) {
                         saveAccountWo(accountId);
+                    } else if (!retried) {
+                        // 捕获的可能是登录前/中间态 token：重扫 localStorage 再验证一次（排除同一 token）
+                        LogHelp.w(TAG, "沃盘验证失败，重扫 localStorage 重试: " + accountId);
+                        rescrapeWoAndValidate(token, accountId, prevAt);
                     } else {
-                        if (prevAt != null && !prevAt.isEmpty()) {
-                            EncryptedCredStore.put(accountId, "access_token", prevAt);
-                            LogHelp.w(TAG, "沃盘验证失败，已恢复旧 access_token: " + accountId);
-                        } else {
-                            EncryptedCredStore.removeAccount(accountId);
-                        }
+                        rollbackWoCredential(accountId, prevAt);
                         Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
                     }
                 });

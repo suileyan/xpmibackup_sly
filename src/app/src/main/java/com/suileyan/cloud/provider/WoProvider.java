@@ -88,6 +88,7 @@ public class WoProvider implements CloudProvider {
 
     private static final String M_APP_QUERY_USER = "AppQueryUser";
     private static final String M_APP_REFRESH_TOKEN = "AppRefreshToken";
+    private static final String M_FAMILY_USER_CURRENT_ENCODE = "FamilyUserCurrentEncode";
     private static final String M_QUERY_ALL_FILES = "QueryAllFiles";
     private static final String M_CREATE_DIRECTORY = "CreateDirectory";
     private static final String M_GET_DOWNLOAD_URL_V2 = "GetDownloadUrlV2";
@@ -108,6 +109,8 @@ public class WoProvider implements CloudProvider {
     private final Object fileTypesLock = new Object();
     /** AppQueryUser 缓存的账号标识（可选展示用，不持久化） */
     private volatile String cachedUserId = "";
+    /** 默认家庭空间 ID（FamilyUserCurrentEncode.defaultHomeId；个人空间建目录也须携带，woopen 对齐） */
+    private volatile String cachedDefaultFamilyId = "";
 
     private static OkHttpClient sClient;
 
@@ -260,12 +263,19 @@ public class WoProvider implements CloudProvider {
             try {
                 return parseRsp(resp.body, channel);
             } catch (CloudException e) {
-                // RSP_CODE==9999 且非 api-user 且未重试过且有 refresh_token → 刷新后重试一次（request.go:42-47）
+                // RSP_CODE==9999 且非 api-user 且未重试过 → 刷新后重试一次（request.go:42-47）
+                // 无 refresh_token（web 端仅提供 UUID access token）时用现有 access_token 直接重试
+                // （woopen retryRefreshValueAsAccess 对齐：token 可能只是需要重试而非失效）
                 var msg = e.getMessage();
                 if (e.isAuthExpired() && retryToken == 0 && !CH_API_USER.equals(channel)
                         && msg != null && msg.contains("9999")) {
                     var rt = refreshToken();
-                    if (rt != null && !rt.isEmpty() && refresh()) {
+                    if (rt != null && !rt.isEmpty()) {
+                        if (refresh()) {
+                            return dispatcher(channel, method, param, bodyOther, 1);
+                        }
+                    } else {
+                        LogHelp.w(TAG, "沃盘 9999 无 refresh_token，用现有 access_token 重试一次: " + method);
                         return dispatcher(channel, method, param, bodyOther, 1);
                     }
                 }
@@ -331,6 +341,29 @@ public class WoProvider implements CloudProvider {
         } catch (Exception ignored) {
         }
         return dispatcher(CH_WOHOME, method, param, other, 0);
+    }
+
+    /** 懒获取默认家庭空间 ID（FamilyUserCurrentEncode，wohome 通道）；失败返回空串由建目录兜底（9999 重试覆盖） */
+    private String ensureFamilyId() {
+        if (!cachedDefaultFamilyId.isEmpty()) return cachedDefaultFamilyId;
+        var param = new JSONObject();
+        try {
+            param.put("clientId", CLIENT_ID);
+        } catch (Exception ignored) {
+        }
+        try {
+            var data = wohome(M_FAMILY_USER_CURRENT_ENCODE, param);
+            var id = data.optString("defaultHomeId", "");
+            if (!id.isEmpty()) {
+                cachedDefaultFamilyId = id;
+                LogHelp.i(TAG, "沃盘默认家庭空间 ID: " + id);
+            }
+            return id;
+        } catch (CloudException e) {
+            // 家庭 ID 获取失败：降级返回空串，建目录沿用空 familyId（原行为），由 dispatcher 9999 重试兜底
+            LogHelp.w(TAG, "沃盘家庭空间 ID 获取失败，降级空 familyId: " + e.getMessage());
+            return "";
+        }
     }
 
     /** 业务封装：api-user 通道 bodyOther={clientId, secret:true}（vars.go JsonClientIDSecret） */
@@ -905,12 +938,12 @@ public class WoProvider implements CloudProvider {
         return null;
     }
 
-    /** 建目录（CreateDirectory → DATA.id）；不存在则创建 */
+    /** 建目录（CreateDirectory → DATA.id）；不存在则创建；familyId 须带默认家庭空间 ID（woopen 对齐，个人空间亦然） */
     private String createDirectory(String parentId, String name) throws CloudException {
         try {
             var param = new JSONObject();
             param.put("spaceType", "0");
-            param.put("familyId", "");
+            param.put("familyId", ensureFamilyId());
             param.put("parentDirectoryId", parentId == null || parentId.isEmpty() ? ROOT_ID : parentId);
             param.put("directoryName", name);
             param.put("clientId", CLIENT_ID);
