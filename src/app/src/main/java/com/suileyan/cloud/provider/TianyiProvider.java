@@ -406,6 +406,8 @@ public class TianyiProvider implements CloudProvider {
         builder.header("User-Agent", UA).header("Referer", WEB_URL + "/web/main/");
         var resp = execute(builder.build());
         if (resp.code < 200 || resp.code >= 300) {
+            // 打响应体定位错误码（风控/InvalidSessionKey/参数问题；truncate 防 token 落盘）
+            LogHelp.w(TAG, "189 getAccessTokenBySsKey HTTP " + resp.code + " body=" + truncate(resp.body, 300));
             throw new CloudException(CloudException.Kind.AUTH_EXPIRED, "189 getAccessTokenBySsKey HTTP " + resp.code);
         }
         try {

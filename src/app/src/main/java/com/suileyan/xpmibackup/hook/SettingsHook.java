@@ -310,7 +310,7 @@ public class SettingsHook {
                 }
             });
         } catch (Throwable e) {
-            logError("hookGetAvailabilityStatus failed", e);
+            logSmartStorageMiss("hookGetAvailabilityStatus", e);
         }
     }
 
@@ -329,7 +329,7 @@ public class SettingsHook {
                 }
             });
         } catch (Throwable e) {
-            logError("hookIsSupported failed", e);
+            logSmartStorageMiss("hookIsSupported", e);
         }
     }
 
@@ -402,7 +402,16 @@ public class SettingsHook {
                 }
             });
         } catch (Throwable e) {
-            logError("hookSmartStorageSummary failed", e);
+            logSmartStorageMiss("hookSmartStorageSummary", e);
+        }
+    }
+
+    /** SmartStorage 类在当前 MIUI 版本不存在（类名随版本变化）时降级为 debug，避免每次进设置页刷 ERROR */
+    private static void logSmartStorageMiss(String hook, Throwable e) {
+        if (e instanceof XposedHelpers.ClassNotFoundError || e.getCause() instanceof ClassNotFoundException) {
+            LogHelp.d(TAG, hook + " skipped（当前 MIUI 版本无 SmartStorage 类）: " + e.getMessage());
+        } else {
+            logError(hook + " failed", e);
         }
     }
 
