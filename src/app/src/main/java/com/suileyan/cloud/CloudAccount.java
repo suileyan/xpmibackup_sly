@@ -15,6 +15,7 @@ public class CloudAccount {
     public static final String PROVIDER_123 = "123";
     public static final String PROVIDER_189 = "189";
     public static final String PROVIDER_BAIDU = "baidu";
+    public static final String PROVIDER_115 = "115";
 
     public final String id;
     public final String provider;

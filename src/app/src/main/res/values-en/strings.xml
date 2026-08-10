@@ -119,6 +119,9 @@
     <string name="cloud_provider_baidu">Baidu Netdisk</string>
     <string name="cloud_provider_baidu_hint">In-app web login</string>
     <string name="title_webview_login_baidu">Log in to Baidu Netdisk</string>
+    <string name="cloud_provider_115">115 Cloud Drive</string>
+    <string name="cloud_provider_115_hint">In-app web login</string>
+    <string name="title_webview_login_115">Log in to 115 Cloud Drive</string>
     <string name="title_webview_login_quark">Log in to Quark Drive</string>
     <string name="webview_login_done">Done</string>
     <string name="webview_login_tip">Log in on the page, then tap "Done" in the top-right corner.</string>

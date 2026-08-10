@@ -2,6 +2,7 @@ package com.suileyan.cloud;
 
 import com.suileyan.cloud.provider.BaiduProvider;
 import com.suileyan.cloud.provider.GuangyaProvider;
+import com.suileyan.cloud.provider.Pan115Provider;
 import com.suileyan.cloud.provider.Pan123Provider;
 import com.suileyan.cloud.provider.QuarkProvider;
 import com.suileyan.cloud.provider.ScriptProvider;
@@ -70,6 +71,9 @@ public final class ProviderRegistry {
             }
             if (account != null && CloudAccount.PROVIDER_BAIDU.equals(account.provider)) {
                 return BaiduProvider.TYPE;
+            }
+            if (account != null && CloudAccount.PROVIDER_115.equals(account.provider)) {
+                return Pan115Provider.TYPE;
             }
             // 未知/已删除账号：返回空串，由调用方回退
             return "";
@@ -160,6 +164,9 @@ public final class ProviderRegistry {
         }
         if (CloudAccount.PROVIDER_BAIDU.equals(account.provider)) {
             return new BaiduProvider(account);
+        }
+        if (CloudAccount.PROVIDER_115.equals(account.provider)) {
+            return new Pan115Provider(account);
         }
         LogHelp.e(TAG, "unsupported cloud provider: " + account.provider);
         return null;
