@@ -8,9 +8,9 @@
 
 ![Upstream](https://img.shields.io/badge/Upstream-XPoser__MiBackup-blue)
 
-本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）、光鸭云盘与夸克云盘内置 Provider、OAuth2 Token 自动刷新等能力。
+本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）与百度网盘内置 Provider、OAuth2/会话自动刷新等能力。
 
-通过 Xposed 模块虚拟小米智能存储设备，将小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘、夸克云盘，实现备份与恢复数据的云端存储。
+通过 Xposed 模块虚拟小米智能存储设备，将小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘，实现备份与恢复数据的云端存储。
 
 ## 原理
 
@@ -20,7 +20,7 @@
 小米备份 App
   -> 查询智能存储设备：返回虚拟设备
   -> 连接 DFS 服务：模拟在线和已连接
-  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭 / 夸克
+  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭 / 夸克 / 123 / 189 / 百度
   -> DFS AIDL 下载：从对应云端读取
   -> 进度与完成回调：回传给小米备份原流程
 ```
@@ -31,11 +31,11 @@
 
 - 在系统设置中注入「云备份助手」配置入口
 - 拦截 DFS 连接，模拟小米智能存储设备在线状态
-- 支持六种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘
-- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克）可并存，按需切换备份目标
+- 支持九种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘
+- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/123/189/百度）可并存，按需切换备份目标
 - 凭据加密存储：密码、Token、Cookie 经 AES-GCM 加密落盘，按账号隔离
-- 网盘 Token 自动刷新：光鸭 OAuth2 refresh_token 自动轮换；夸克 __puus 会话自动续期，401 自动重试
-- 大文件在 Cloud 层统一切片上传，六种协议共用同一套切片逻辑
+- 网盘 Token 自动刷新：光鸭 OAuth2 refresh_token 自动轮换；夸克 __puus 会话自动续期，401 自动重试；天翼 refreshToken 自动轮换 + accessToken 过期自愈
+- 大文件在 Cloud 层统一切片上传，九种协议共用同一套切片逻辑
 - 自动清理超出数量限制的旧备份
 - 顶部「备份」按钮点击进入智能存储备份页，长按进入备份升级页
 
@@ -71,13 +71,13 @@
 │  ProgressCallback / CloudException / RetryPolicy             │
 └───────────────────────────┬─────────────────────────────────┘
                             │
-┌───────────────┬───────────┴───────────┬─────────────────────┐
-│  NAS 方案     │  云盘账号              │  自定义脚本          │
-│  SmbProvider  │  Yun139Provider        │  ScriptProvider     │
-│  WebdavProvider│ GuangyaProvider       │  (Rhino JS 沙箱 v2) │
-│  (继承基类)   │  QuarkProvider        │  (继承基类)         │
-│               │  (继承基类)           │                     │
-└───────────────┴───────────────────────┴─────────────────────┘
+┌───────────────┬──────────────────┬──────────────────┬─────────────────────┐
+│  NAS 方案     │  云盘账号         │  云盘账号         │  自定义脚本          │
+│  SmbProvider  │  Yun139Provider   │  Pan123Provider   │  ScriptProvider     │
+│  WebdavProvider│ GuangyaProvider  │  TianyiProvider   │  (Rhino JS 沙箱 v2) │
+│  (继承基类)   │  QuarkProvider    │  BaiduProvider    │  (继承基类)         │
+│               │  (继承基类)       │  (继承基类)       │                     │
+└───────────────┴──────────────────┴──────────────────┴─────────────────────┘
 ```
 
 ### 双进程注入
@@ -107,7 +107,7 @@
 
 `ProviderRegistry.active()` 按以下优先级返回当前备份目标的 Provider：
 
-1. **云盘备份目标**（`backup_target.json` 中 `mode=cloud`）：按云盘账号 id 构造 `Yun139Provider` / `GuangyaProvider` / `QuarkProvider`
+1. **云盘备份目标**（`backup_target.json` 中 `mode=cloud`）：按云盘账号 id 构造 `Yun139Provider` / `GuangyaProvider` / `QuarkProvider` / `Pan123Provider` / `TianyiProvider` / `BaiduProvider`
 2. **NAS 激活方案**（`profiles.json` 中 `activeId`）：按方案 type 构造 `SmbProvider` / `WebdavProvider` / `ScriptProvider`
 
 NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓存**（凭据可能因重新登录变化，每次重新构造读取最新凭据）。
@@ -147,6 +147,9 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 | 139 云盘 | Authorization（Basic）         | WebView 网页登录捕获 | 不支持（Cookie 型）              | 引导重新登录                |
 | 光鸭云盘   | access_token + refresh_token | WebView 网页登录捕获 | OAuth2 refresh_token 自动轮换  | refresh_token 失效则引导重登 |
 | 夸克云盘   | Cookie（含 __puus 会话）       | WebView 网页登录捕获 | __puus 响应 Set-Cookie 自动续期 | 会话失效则引导重新登录        |
+| 123云盘   | Bearer token（JWT）          | WebView 网页登录捕获 | 不支持（Token 型）              | 引导重新登录                |
+| 天翼云盘(189) | SSON Cookie + access_token + refresh_token | WebView 网页登录捕获 | refreshToken 自动轮换；InvalidAccessToken/InvalidSessionKey 自愈重试 | 会话失效则引导重新登录 |
+| 百度网盘   | Cookie（含 BDUSS）            | WebView 网页登录捕获 | 不支持（BDUSS 无刷新机制）         | BDUSS 失效则引导重新登录     |
 
 ### 光鸭云盘 OAuth2 刷新
 
@@ -166,6 +169,26 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 - **上传（OSS 五步）**：`file/upload/pre` 预上传 → `file/update/hash` 上报 md5/sha1（可秒传）→ `file/upload/auth` 换取分片授权 → OSS `PUT` 分片直传（分片大小取 pre 响应下发的 `part_size`）→ `file/upload/auth` 换合并授权 + OSS `CompleteMultipartUpload` → `file/upload/finish` 确认
 - **签名要点**：OSS 签名由服务端按 `auth_meta` 签发，请求头必须与实际发送完全一致（Content-Type 需含 `; charset=utf-8` 等细节），否则返回 `403 SignatureDoesNotMatch`
 - **列表 / 下载**：`GET /file/sort` 分页列目录；`POST /file/download` 换取直链后流式下载（带 Cookie/Referer/UA）
+
+### 天翼云盘（189）会话与签名
+
+天翼云盘无公开 OAuth App，凭据为网页登录后的 `SSON` Cookie，API 请求按域名使用三类签名（对齐 [wes-lin/cloud189-sdk](https://github.com/wes-lin/cloud189-sdk)）：
+
+- **登录链**：WebView 捕获 `SSON` Cookie → `getSessionForPC` 换 `sessionKey`（响应为 JSON 字段，`res_code` 可能是数字或字符串错误码，已兼容）→ 用 `sessionKey` 经 `getAccessTokenBySsKey` 换取 `accessToken`（该接口不直接返回 accessToken）
+- **会话续期**：内存快路径 → 持久化有效会话 → `sessionKey` 续 `accessToken` → `accessToken` 直登 → `refreshToken` 轮换 → SSON 兜底，全程 `synchronized` 单飞；`InvalidAccessToken` / `InvalidSessionKey`（HTTP 400）自动清空对应 token 重试
+- **上传（完整复刻 SDK）**：`partSize` 三段式（10MiB / 20MiB / 大文件公式）→ `initMultiUpload`（单分片带 `fileMd5`/`sliceMd5`，多分片 `lazyCheck=1`）→ `checkTransSecond` 秒传 → `getMultiUploadUrls` 取服务端签发 PUT 签名 → 并发 5 分片直传（`requestHeader` 透传）→ `commitMultiUploadFile`
+- **签名要点**：api 域 `Accesstoken`（小写 t）MD5 参数签名头；upload 域 `signatureUpload`——业务参数 AES-128-ECB 加密为 `params`，uuid 经 RSA 加密为 `EncryptionText`，请求数据 HMAC-SHA1 为 `Signature`；`generateRsaKey` 在会话有效时返回 **XML**（`<keyPair><pubKey>…`）而非 JSON，解析已双格式兼容
+- **列表 / 下载 / 删除**：`open/file/listFiles.action` 分页；`getFileDownloadUrl` 直链流式下载；`batch/createBatchTask(DELETE)` + `checkBatchTask` 轮询删除
+
+### 百度网盘（baidu）xpan
+
+百度网盘无开放上传 API，凭据为网页登录后的完整 Cookie（核心为 `BDUSS`），直连 xpan 接口（`pan.baidu.com/api`，`app_id=250528`，可访问全盘）：
+
+- **登录**：WebView 加载 `pan.baidu.com`，捕获时合并 `pan / passport` 两个域的 Cookie 按名去重；`BDUSS` 缺失视为未完成登录
+- **写操作凭据**：`gettemplatevariable` 获取 `bdstoken` 并缓存，写端点携带，失效（errno -2/2）自动清缓存重取
+- **上传**：`precreate`（4MB 块 `block_list` + `content-md5`；响应 `block_list` 为空数组 = 秒传命中，跳过上传直接合并）→ `superfile2` 并发 3 分片（partseq 0 起，multipart，响应 md5 与本地比对，失败重传一片）→ `create`（type=2）合并；合并失败（31081/31363）整文件重传一次。注：旧 `rapidupload` 接口已被百度限制（errno=2），秒传检测统一由 `precreate` 承担
+- **下载 / 删除**：`filemetas` 取 `dlink` 直链流式下载（带 Cookie/Referer/UA + 长度校验）；`filemanager`（opera=delete，`filelist` 须含 `fs_id`）
+- **过期处理**：`errno -6` / HTTP 403+31045 → `AUTH_EXPIRED` 引导重新登录；删除类写操作可能触发 `errno=132` 安全验证风控（账号级，API 无法绕过，仅记日志）
 
 ### 139 云盘签名与路由
 
@@ -246,11 +269,11 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 | 字段         | 说明                     |
 | ---------- | ---------------------- |
 | `id`       | 账号唯一标识                 |
-| `provider` | 网盘类型：`139`、`guangya` 或 `quark` |
-| `account`  | 登录账号（139 为手机号）         |
+| `provider` | 网盘类型：`139`、`guangya`、`quark`、`123`、`189` 或 `baidu` |
+| `account`  | 登录账号（139 为手机号，189 为登录名） |
 | `name`     | 显示名称                   |
 
-登录捕获的 `Authorization` / `access_token` / `refresh_token` / `host` 等敏感凭据存入 EncryptedCredStore，按账号 id 隔离。
+登录捕获的 `Authorization` / `access_token` / `refresh_token` / `SSON` / `Cookie` / `host` 等敏感凭据存入 EncryptedCredStore，按账号 id 隔离。
 
 ### 旧配置自动迁移
 
@@ -277,7 +300,8 @@ app/src/main/java/com/suileyan/
     CloudProvider.java            统一接口
     provider/AbstractCloudProvider  Provider 公共基类（Profile + ThreadLocal 凭据注入）
     CloudProvider 实现：SmbProvider / WebdavProvider / ScriptProvider
-                      Yun139Provider / GuangyaProvider / QuarkProvider  (provider/)
+                      Yun139Provider / GuangyaProvider / QuarkProvider
+                      Pan123Provider / TianyiProvider / BaiduProvider  (provider/)
     ProviderRegistry.java         Provider 注册表与活跃目标分发
     ProfileStore / Profile        NAS 方案持久化与模型
     CloudAccountStore / CloudAccount  云盘账号持久化与模型
@@ -311,7 +335,7 @@ app/src/main/java/com/suileyan/
 | -------------------- | ------------------------------------------ |
 | `SettingsHook`       | 在设置 App 中注入配置入口，展示虚拟智能存储设备                 |
 | `AIDLHook`           | 模拟 DFS 服务连接，拦截上传、下载、目录查询，分发到 CloudFileHelp |
-| `CloudFileHelp`      | 统一分发六种通道，处理跨协议切片与 AUTH_EXPIRED 重试          |
+| `CloudFileHelp`      | 统一分发九种通道，处理跨协议切片与 AUTH_EXPIRED 重试          |
 | `BackupHook`         | 修正备份 App 页面、通知、进度焦点和取消清理                   |
 | `AutoBackupHook`     | 接入备份 App 原生自动备份设置和调度链路                     |
 | `ProviderRegistry`   | 按备份目标（云盘账号优先，其次激活方案）取 Provider 实例          |
@@ -336,7 +360,7 @@ gradlew assembleDebug
 | ------------------------------------------ | --------------------------- |
 | [Xposed API](https://api.xposed.info/)     | 框架 Hook 能力                  |
 | [smbj](https://github.com/hierynomus/smbj) | SMB/CIFS 协议                 |
-| [OkHttp](https://square.github.io/okhttp/) | HTTP 客户端（WebDAV / 139 / 光鸭 / 夸克） |
+| [OkHttp](https://square.github.io/okhttp/) | HTTP 客户端（WebDAV / 139 / 光鸭 / 夸克 / 123 / 189 / 百度） |
 | [Rhino](https://github.com/mozilla/rhino)  | 自定义 HTTP 脚本 JS 运行时          |
 
 ## 安全说明
