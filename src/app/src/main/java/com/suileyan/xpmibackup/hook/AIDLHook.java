@@ -458,6 +458,8 @@ public class AIDLHook {
         try {
             var remoteDir = normalizeRemotePath(remotePath);
             var entries = CloudFileHelp.listEntries(remoteDir);
+            LogHelp.d(TAG, "mock list: aidl=" + remotePath + " -> remote=" + remoteDir
+                    + " entries=" + entries.size() + (entries.isEmpty() ? "" : " first=" + entries.get(0).name));
             var aidlDir = normalizeAidlListPath(remotePath);
             entries = normalizeListEntries(entries, aidlDir);
             if (receiver != null) {
@@ -466,8 +468,17 @@ public class AIDLHook {
                 invokeReceiverSend(receiver, 0, bundle);
             }
         } catch (Exception e) {
-            logError("mock list failed", e);
+            logError("mock list failed: aidl=" + remotePath + " -> remote=" + normalizeRemotePathQuiet(remotePath), e);
             sendEmptyList(receiver, lpparam);
+        }
+    }
+
+    /** 失败日志用：normalizeRemotePath 抛异常时不阻塞异常打印 */
+    private static String normalizeRemotePathQuiet(String aidlPath) {
+        try {
+            return normalizeRemotePath(aidlPath);
+        } catch (Exception e) {
+            return "<unresolved: " + aidlPath + ">";
         }
     }
 
@@ -567,9 +578,11 @@ public class AIDLHook {
         try {
             BackupHook.clearActiveBackupDirs();
             keepDfsConnected(lpparam);
-            downloadViaFd(aidlPath, pfd, taskId);
+            notifyProgressStart(listener, taskId);
+            downloadViaFd(aidlPath, pfd, taskId, startPos, listener);
             keepDfsConnected(lpparam);
             notifyProgressFinish(listener, taskId, 0, "success");
+            LogHelp.d(TAG, "mock download OK: path=" + aidlPath + " start=" + startPos + " flags=" + flags);
         } catch (Exception e) {
             logError("mock download failed: path=" + aidlPath + ", start=" + startPos + ", flags=" + flags, e);
             notifyProgressFinish(listener, taskId, -1, e.getMessage());
@@ -1040,9 +1053,12 @@ public class AIDLHook {
     }
 
     /**
-     * 从当前云端备份协议下载文件并写入ParcelFileDescriptor
+     * 从当前云端备份协议下载文件并写入ParcelFileDescriptor。
+     * startPos 断点续传：App 端 ReDownloadSplitTask 以本地已有长度作偏移，pfd 以 READ_WRITE（不 TRUNCATE）打开
+     * 且本地保留 [0,startPos)——本方法下载整文件后跳过前 startPos 字节、从 fd 偏移 startPos 处写尾部，
+     * 避免整文件从头覆盖损坏恢复数据（startPos > fileSize 拒绝）
      */
-    private void downloadViaFd(String aidlPath, ParcelFileDescriptor pfd, String taskId) throws Exception {
+    private void downloadViaFd(String aidlPath, ParcelFileDescriptor pfd, String taskId, long startPos, Object listener) throws Exception {
         var remotePath = normalizeRemotePath(aidlPath);
         var tmpFile = new File(LocalBackupFileHelp.TEMP_BACKUP_ROOT + taskId + "_download_tmp");
         tmpFile.getParentFile().mkdirs();
@@ -1051,11 +1067,52 @@ public class AIDLHook {
             if (result != null && result.startsWith("ERROR:")) {
                 throw new IllegalStateException(result);
             }
+            var fileSize = tmpFile.length();
+            if (startPos > fileSize) {
+                throw new IllegalStateException("download startPos " + startPos + " > fileSize " + fileSize
+                        + " path=" + remotePath + "（拒绝覆盖恢复数据）");
+            }
+            if (startPos > 0) {
+                android.system.Os.lseek(pfd.getFileDescriptor(), startPos, android.system.OsConstants.SEEK_SET);
+            }
             try (var is = new FileInputStream(tmpFile); var os = new FileOutputStream(pfd.getFileDescriptor())) {
-                copyStream(is, os);
+                skipFully(is, startPos);
+                copyStreamWithProgress(is, os, listener, taskId, fileSize - startPos);
             }
         } finally {
             deleteTempFile(tmpFile);
+        }
+    }
+
+    /** 可靠跳过 N 字节（InputStream.skip 可能部分跳过，读空抛 EOF） */
+    private static void skipFully(java.io.InputStream is, long n) throws Exception {
+        var remaining = n;
+        while (remaining > 0) {
+            var skipped = is.skip(remaining);
+            if (skipped <= 0) {
+                if (is.read() == -1) {
+                    throw new java.io.EOFException("EOF while skipping " + n + " bytes");
+                }
+                remaining -= 1;
+            } else {
+                remaining -= skipped;
+            }
+        }
+    }
+
+    /** 拷贝流并回调 D0(taskId, done, total) 进度 */
+    private static void copyStreamWithProgress(java.io.InputStream is, java.io.OutputStream os, Object listener, String taskId, long total) throws Exception {
+        var buf = new byte[1048576];
+        long written = 0;
+        while (true) {
+            var len = is.read(buf);
+            if (len == -1) {
+                return;
+            }
+            os.write(buf, 0, len);
+            written += len;
+            invokeProgress(listener, "D0", new Class[]{String.class, long.class, long.class},
+                    ProgressCallbackHelp.safeString(taskId), written, total);
         }
     }
 
@@ -1181,11 +1238,14 @@ public class AIDLHook {
     }
 
     /**
-     * 旧版恢复列表会同步检查mTempPath，这里直接补齐它要解析的本地临时目录
+     * 旧版恢复列表会同步检查mTempPath，这里直接补齐它要解析的本地临时目录。
+     * 注意：字段名随 MIUI 版本可能混淆（实证为 "f"），按候选名回退查找，全找不到必须告警（否则恢复列表为空且无日志）
      */
     private static void ensureDfsTempPath(Class<?> serviceClass, Object instance, String deviceId) throws Exception {
-        var field = findFieldByName(serviceClass, "mTempPath");
+        var field = findFieldByNames(serviceClass, "mTempPath", "f");
         if (field == null) {
+            logError("ensureDfsTempPath: mTempPath 字段未找到（版本混淆变更？）", new IllegalStateException(
+                    "DistFileClientService fields=" + java.util.Arrays.toString(serviceClass.getDeclaredFields())));
             return;
         }
         field.setAccessible(true);
@@ -1212,17 +1272,25 @@ public class AIDLHook {
     }
 
     /**
-     * 把云端descript.xml预下载到备份应用自己的临时目录，恢复列表仍走原生BackupDescriptor解析
+     * 把云端descript.xml预下载到备份应用自己的临时目录，恢复列表仍走原生BackupDescriptor解析。
+     * 字段名兼容混淆（"f"）；mTempPath 未设置时用模块默认临时目录兜底
      */
     private static void ensureRestoreDescriptors(Class<?> serviceClass, Object instance) throws Exception {
-        var field = findFieldByName(serviceClass, "mTempPath");
-        if (field == null) {
-            return;
+        var field = findFieldByNames(serviceClass, "mTempPath", "f");
+        String tempPath = null;
+        if (field != null) {
+            field.setAccessible(true);
+            var v = field.get(instance);
+            if (v instanceof String && !((String) v).isEmpty()) {
+                tempPath = (String) v;
+            }
         }
-        field.setAccessible(true);
-        var tempPath = (String) field.get(instance);
         if (tempPath == null || tempPath.isEmpty()) {
-            return;
+            tempPath = LocalBackupFileHelp.TEMP_BACKUP_ROOT + getMockDeviceId();
+            var dir = new File(tempPath);
+            if (!dir.exists() && !dir.mkdirs()) {
+                logError("create restore temp dir failed", new IllegalStateException(tempPath));
+            }
         }
         var result = CloudFileHelp.listAndDownloadXml(tempPath);
         if (result != null && result.startsWith("ERROR:")) {
@@ -1257,6 +1325,15 @@ public class AIDLHook {
             } catch (NoSuchFieldException ignored) {
                 current = current.getSuperclass();
             }
+        }
+        return null;
+    }
+
+    /** 按候选名逐个查找字段（兼容明文名与混淆名，如 mTempPath / f） */
+    private static java.lang.reflect.Field findFieldByNames(Class<?> clazz, String... names) {
+        for (var name : names) {
+            var f = findFieldByName(clazz, name);
+            if (f != null) return f;
         }
         return null;
     }
