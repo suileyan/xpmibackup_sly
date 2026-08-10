@@ -37,6 +37,27 @@ public final class Yun139Login {
 
     private static final String TAG = "XpMiBackup";
     private static final String API_BASE = "https://yun.139.com";
+    /** 允许的 API 主机白名单（HIGH-03：host 由调用方传入，方法内做 allowlist 校验，防 SSRF 泄凭据） */
+    private static final java.util.Set<String> ALLOWED_HOSTS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "yun.139.com",
+            "personal-kd-njs.yun.139.com",
+            "personal-kd-bj.yun.139.com",
+            "personal-kd-sh.yun.139.com",
+            "personal-kd-gd.yun.139.com",
+            "personal-kd-hz.yun.139.com",
+            "personal-kd-cq.yun.139.com",
+            "personal-kd-sd.yun.139.com",
+            "personal-kd-fj.yun.139.com",
+            "personal-kd-js.yun.139.com",
+            "personal-kd-hn.yun.139.com",
+            "personal-kd-hb.yun.139.com",
+            "personal-kd-sc.yun.139.com",
+            "personal-kd-xa.yun.139.com",
+            "personal-kd-tj.yun.139.com",
+            "personal-kd-sz.yun.139.com",
+            "personal-kd-wh.yun.139.com",
+            "personal-kd-zz.yun.139.com"
+    ));
     private static final MediaType JSON = MediaType.parse("application/json;charset=UTF-8");
     private static final String CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
@@ -62,6 +83,15 @@ public final class Yun139Login {
      */
     public static boolean validate(String authorization, String host) {
         if (authorization == null || authorization.trim().isEmpty()) return false;
+        // HIGH-03：方法内对 host 做 allowlist 校验（调用方可能传入攻击者控制的 host，
+        // 若不校验会把 Authorization 头发送到攻击者服务器泄露凭据）
+        if (host != null && !host.trim().isEmpty()) {
+            var h = host.trim().toLowerCase(Locale.ROOT);
+            if (!ALLOWED_HOSTS.contains(h)) {
+                LogHelp.w(TAG, "139 validate 拒绝未授权 host: " + host);
+                return false;
+            }
+        }
         try {
             var body = buildListBody();
             var ts = currentTimestamp();

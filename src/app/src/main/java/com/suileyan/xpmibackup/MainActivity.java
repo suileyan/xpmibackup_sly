@@ -52,6 +52,8 @@ public class MainActivity extends Activity {
      */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // 启动耗时诊断（STARTUP 日志）：定位黑屏/卡顿阶段
+        var startupT0 = System.currentTimeMillis();
         super.onCreate(savedInstanceState);
         // 恢复主题切换重建前的 Tab 位置（切主题后停留在原页面，不回到设备配置页）
         if (savedInstanceState != null) {
@@ -69,6 +71,7 @@ public class MainActivity extends Activity {
                     View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
         setContentView(R.layout.activity_main);
+        com.suileyan.comm.LogHelp.i("XpMiBackup", "STARTUP setContentView done: " + (System.currentTimeMillis() - startupT0) + "ms");
 
         tabDeviceIcon = findViewById(R.id.tab_device_icon);
         tabDeviceText = findViewById(R.id.tab_device_text);
@@ -111,6 +114,7 @@ public class MainActivity extends Activity {
         }
 
         initTabs();
+        com.suileyan.comm.LogHelp.i("XpMiBackup", "STARTUP initTabs done: " + (System.currentTimeMillis() - startupT0) + "ms");
         // 高亮当前 Tab（主题切换重建后恢复上次位置，不强制回设备配置页）
         updateTabSelection(TAB_NAMES[currentIndex]);
         // 主题切换重建：窗口淡入过渡 + 恢复设置页
@@ -123,6 +127,8 @@ public class MainActivity extends Activity {
         }
         // 全面屏手势返回：API 33+ 注册 OnBackInvokedCallback（按设置开关启用/关闭预测动画）
         updateBackInvoke();
+        // 凭据库后台预热：PBKDF2 600000 迭代迁移较重，异步执行避免主线程阻塞（启动黑屏优化）
+        com.suileyan.cloud.EncryptedCredStore.warmUp();
         // 仅应用进入时自动检测一次版本（设置页可关闭，弹小窗可点空白取消）
         checkUpdatesOnLaunch();
     }
@@ -437,8 +443,12 @@ public class MainActivity extends Activity {
             var tag = "tab-" + TAB_NAMES[i];
             var f = fm.findFragmentByTag(tag);
             if (f == null) {
+                // 启动耗时诊断：记录每个 Tab Fragment 创建耗时（黑屏排查）
+                var t = System.currentTimeMillis();
                 f = createTabFragment(i);
                 fm.beginTransaction().add(R.id.fragment_container, f, tag).commitAllowingStateLoss();
+                com.suileyan.comm.LogHelp.i("XpMiBackup", "STARTUP create tab[" + i + "]=" + TAB_NAMES[i]
+                        + " new " + (System.currentTimeMillis() - t) + "ms");
             }
         }
         tabsReady = true;

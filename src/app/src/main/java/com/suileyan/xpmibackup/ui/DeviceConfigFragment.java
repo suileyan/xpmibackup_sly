@@ -31,6 +31,7 @@ public class DeviceConfigFragment extends Fragment {
      */
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        var t0 = System.currentTimeMillis();
         var view = inflater.inflate(R.layout.fragment_device_config, container, false);
         etDeviceName = view.findViewById(R.id.et_device_name);
         etSettingsSummary = view.findViewById(R.id.et_device_describe);
@@ -41,6 +42,7 @@ public class DeviceConfigFragment extends Fragment {
 
         // 加载配置
         loadConfig();
+        com.suileyan.comm.LogHelp.i(TAG, "STARTUP DeviceConfigFragment onCreateView: " + (System.currentTimeMillis() - t0) + "ms");
 
         // 点击事件：校验通过才提示保存成功（NEW-M-01）
         btnSave.setOnClickListener(v -> {

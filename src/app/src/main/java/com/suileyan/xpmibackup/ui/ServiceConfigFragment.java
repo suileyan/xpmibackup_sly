@@ -76,6 +76,7 @@ public class ServiceConfigFragment extends Fragment {
      */
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        var t0 = System.currentTimeMillis();
         var view = inflater.inflate(R.layout.fragment_service_config, container, false);
 
         profileSpinner = view.findViewById(R.id.profile_spinner);
@@ -150,6 +151,7 @@ public class ServiceConfigFragment extends Fragment {
         });
 
         loadConfig();
+        com.suileyan.comm.LogHelp.i(TAG, "STARTUP ServiceConfigFragment onCreateView: " + (System.currentTimeMillis() - t0) + "ms");
         return view;
     }
 

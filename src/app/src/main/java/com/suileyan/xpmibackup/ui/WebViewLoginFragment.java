@@ -218,7 +218,9 @@ public class WebViewLoginFragment extends Fragment {
         settings.setDisplayZoomControls(false);
         // 初始 100% 缩放，不自动缩小，横向滚动完整查看
         webView.setInitialScale(100);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+        // HIGH-06：关闭第三方 Cookie——登录态捕获全部基于各网盘首方域 Cookie（capture* 按域合并），
+        // 第三方 Cookie（分析/CDN 脚本）会扩大 session fixation 与跨站凭据窃取面，无必要开启
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
 
         webView.setWebChromeClient(new android.webkit.WebChromeClient() {
             @Override
@@ -239,7 +241,8 @@ public class WebViewLoginFragment extends Fragment {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 // 记录所有子资源请求到独立 web.log，用于定位网盘前端 API（容量等）调用逻辑（NEW-H-06）
-                LogHelp.web("REQ " + request.getMethod() + " " + request.getUrl());
+                // 仅记录 scheme://host/path，剥离 query string（可能含 access_token 等敏感参数，HIGH-02）
+                LogHelp.web("REQ " + request.getMethod() + " " + stripQuery(request.getUrl().toString()));
                 if (request.isForMainFrame()) {
                     LogHelp.web("  ^ main-frame redirect=" + request.isRedirect());
                 }
@@ -320,7 +323,7 @@ public class WebViewLoginFragment extends Fragment {
 
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                LogHelp.web("PAGE_START " + url);
+                LogHelp.web("PAGE_START " + stripQuery(url));
             }
 
             @Override
@@ -331,7 +334,7 @@ public class WebViewLoginFragment extends Fragment {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                LogHelp.web("PAGE_FINISH " + url);
+                LogHelp.web("PAGE_FINISH " + stripQuery(url));
                 // 再次注入：防页面脚本/SPA 重写 viewport；随后兜底扫描 localStorage
                 injectDesktopMode(view);
                 if (PROVIDER_GUANGYA.equals(provider)) {
@@ -497,6 +500,16 @@ public class WebViewLoginFragment extends Fragment {
         if (host == null) return false;
         var h = host.toLowerCase(java.util.Locale.ROOT);
         return h.equals("guangyapan.com") || h.endsWith(".guangyapan.com");
+    }
+
+    /** 剥离 URL 的 query string 与 fragment，仅保留 scheme://host/path（日志脱敏，HIGH-02） */
+    private static String stripQuery(String url) {
+        if (url == null || url.isEmpty()) return "";
+        var idx = url.indexOf('?');
+        if (idx >= 0) url = url.substring(0, idx);
+        var hash = url.indexOf('#');
+        if (hash >= 0) url = url.substring(0, hash);
+        return url;
     }
 
     /** 严格判断主机名是否属于夸克网盘主站（pan.quark.cn） */
@@ -677,9 +690,11 @@ public class WebViewLoginFragment extends Fragment {
                 .findFirst().orElse(null);
         if (existing != null) id = existing.id;
         var accountId = id;
+        // HIGH-01：幂等复用场景先备份旧凭据，验证失败恢复而非删除（避免误删旧有效凭据）
+        final var prevCk = existing != null ? EncryptedCredStore.get(accountId, "cookie") : null;
         new Thread(() -> {
             try {
-                // 临时保存用于验证，成功后保留；失败则回滚
+                // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
                 EncryptedCredStore.put(accountId, "cookie", ck);
                 var provider = com.suileyan.cloud.ProviderRegistry.forAccount(
                         new CloudAccount(accountId, CloudAccount.PROVIDER_QUARK, "", "", System.currentTimeMillis()));
@@ -698,7 +713,7 @@ public class WebViewLoginFragment extends Fragment {
                             if (!t.isEmpty()) names.add(t.split("=", 2)[0]);
                         }
                         LogHelp.w(TAG, "夸克 Cookie 验证失败，捕获键名: " + String.join(",", names));
-                        EncryptedCredStore.removeAccount(accountId);
+                        rollbackCredential(accountId, "cookie", prevCk);
                         Toast.makeText(getActivity(), R.string.toast_quark_login_incomplete, Toast.LENGTH_LONG).show();
                     }
                 });
@@ -1051,12 +1066,17 @@ public class WebViewLoginFragment extends Fragment {
 
     /** HIGH-01 回滚：验证失败恢复旧 access_token；原本无账号则删除临时凭据 */
     private void rollbackWoCredential(String accountId, String prevAt) {
-        if (prevAt != null && !prevAt.isEmpty()) {
-            EncryptedCredStore.put(accountId, "access_token", prevAt);
-            LogHelp.w(TAG, "沃盘验证失败，已恢复旧 access_token: " + accountId);
+        rollbackCredential(accountId, "access_token", prevAt);
+    }
+
+    /** HIGH-01 通用回滚：验证失败恢复指定键的旧凭据；原本无值则删除临时凭据 */
+    private void rollbackCredential(String accountId, String key, String prevValue) {
+        if (prevValue != null && !prevValue.isEmpty()) {
+            EncryptedCredStore.put(accountId, key, prevValue);
+            LogHelp.w(TAG, "验证失败，已恢复旧凭据: " + accountId + " key=" + key);
         } else {
             EncryptedCredStore.removeAccount(accountId);
-            LogHelp.w(TAG, "沃盘验证失败，已删除临时凭据: " + accountId);
+            LogHelp.w(TAG, "验证失败，已删除临时凭据: " + accountId);
         }
     }
 
@@ -1296,6 +1316,8 @@ public class WebViewLoginFragment extends Fragment {
         var accountId = id;
         // 归一化：与参考 self.authorization='Bearer '+token 一致
         var authValue = token.toLowerCase(java.util.Locale.ROOT).startsWith("bearer ") ? token : "Bearer " + token;
+        // HIGH-01：幂等复用场景先备份旧凭据，验证失败恢复而非删除
+        final var prevAuth = existing != null ? EncryptedCredStore.get(accountId, "authorization") : null;
         new Thread(() -> {
             try {
                 // 临时保存用于验证，成功后保留；失败则回滚
@@ -1310,7 +1332,7 @@ public class WebViewLoginFragment extends Fragment {
                     if (ok) {
                         saveAccount123(accountId, token);
                     } else {
-                        EncryptedCredStore.removeAccount(accountId);
+                        rollbackCredential(accountId, "authorization", prevAuth);
                         Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
                     }
                 });
@@ -1333,7 +1355,7 @@ public class WebViewLoginFragment extends Fragment {
             var uid = com.suileyan.cloud.AccountDisplay.decodeUid(token);
             CloudAccountStore.add(new CloudAccount(id, CloudAccount.PROVIDER_123, uid,
                     getString(R.string.cloud_provider_123), System.currentTimeMillis()));
-            LogHelp.i(TAG, "123云盘账号已保存: " + id + " uid=" + uid + " token_len=" + token.length());
+            LogHelp.i(TAG, "123云盘账号已保存: " + id + " uidLen=" + (uid != null ? uid.length() : 0) + " token_len=" + token.length());
             finishSave();
         } catch (Exception e) {
             LogHelp.e(TAG, "save 123 account failed", e);
@@ -1406,7 +1428,8 @@ public class WebViewLoginFragment extends Fragment {
             var account = decodeAccount(authorization);
             var name = account.isEmpty() ? getString(R.string.cloud_account_default_name)
                     : getString(R.string.cloud_account_name_format, account);
-            var id = "139_" + (account.isEmpty() ? System.currentTimeMillis() : account);
+            // HIGH-04：账号 id 不嵌入手机号（时间戳生成），避免 PII 随 id 落盘日志/文件
+            var id = "139_" + System.currentTimeMillis();
             CloudAccountStore.add(new CloudAccount(id, CloudAccount.PROVIDER_139, account, name, System.currentTimeMillis()));
             EncryptedCredStore.put(id, "authorization", authorization);
             if (capturedHost != null && !capturedHost.isEmpty()) {
@@ -1440,7 +1463,7 @@ public class WebViewLoginFragment extends Fragment {
             if (refresh != null && !refresh.isEmpty()) {
                 EncryptedCredStore.put(id, "refresh_token", refresh);
             }
-            LogHelp.i(TAG, "光鸭账号已保存: " + id + " uid=" + uid
+            LogHelp.i(TAG, "光鸭账号已保存: " + id + " uidLen=" + (uid != null ? uid.length() : 0)
                     + " refresh=" + (refresh != null && !refresh.isEmpty()));
             finishSave();
         } catch (Exception e) {

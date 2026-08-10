@@ -58,6 +58,7 @@ public final class CloudAccountStore {
 
     private static List<CloudAccount> load() {
         var list = new ArrayList<CloudAccount>();
+        var t0 = System.currentTimeMillis();
         try {
             var file = new File(ACCOUNT_FILE);
             if (!file.exists()) return list;
@@ -66,12 +67,22 @@ public final class CloudAccountStore {
             if (arr != null) {
                 for (var i = 0; i < arr.length(); i++) {
                     var obj = arr.optJSONObject(i);
-                    if (obj != null) list.add(CloudAccount.fromJson(obj));
+                    if (obj != null) {
+                        var a = CloudAccount.fromJson(obj);
+                        // CRIT-02：account（手机号 PII）明文不入文件，从加密存储回填
+                        if (a.account == null || a.account.isEmpty()) {
+                            a = new CloudAccount(a.id, a.provider,
+                                    EncryptedCredStore.get(a.id, "account_label"),
+                                    a.name, a.createdAt);
+                        }
+                        list.add(a);
+                    }
                 }
             }
         } catch (Exception e) {
             LogHelp.e(TAG, "load cloud accounts failed", e);
         }
+        LogHelp.i(TAG, "STARTUP CloudAccountStore.load: " + list.size() + " accounts, " + (System.currentTimeMillis() - t0) + "ms");
         return list;
     }
 
@@ -83,6 +94,10 @@ public final class CloudAccountStore {
             var root = new JSONObject();
             var arr = new JSONArray();
             for (var a : list) {
+                // CRIT-02：account 明文写入加密存储（account_label 键），文件内置空
+                if (a.account != null && !a.account.isEmpty()) {
+                    EncryptedCredStore.put(a.id, "account_label", a.account);
+                }
                 arr.put(a.toJson());
             }
             root.put(KEY_ACCOUNTS, arr);

@@ -33,6 +33,7 @@ public class AccountConfigFragment extends Fragment {
      */
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        var t0 = System.currentTimeMillis();
         var view = inflater.inflate(R.layout.fragment_account_config, container, false);
 
         accountList = view.findViewById(R.id.cloud_account_list);
@@ -40,6 +41,7 @@ public class AccountConfigFragment extends Fragment {
         view.findViewById(R.id.btn_add_cloud_account).setOnClickListener(v -> openLogin());
 
         refreshList();
+        com.suileyan.comm.LogHelp.i("XpMiBackup", "STARTUP AccountConfigFragment onCreateView: " + (System.currentTimeMillis() - t0) + "ms");
         return view;
     }
 
@@ -61,18 +63,25 @@ public class AccountConfigFragment extends Fragment {
         if (accountList == null || tvEmpty == null) {
             return;
         }
-        accountList.removeAllViews();
-        var accounts = CloudAccountStore.list();
-        if (accounts.isEmpty()) {
-            tvEmpty.setVisibility(View.VISIBLE);
-            return;
-        }
-        tvEmpty.setVisibility(View.GONE);
-        for (var account : accounts) {
-            // 老账号 uid 回填放在刷新时机执行（展示函数不再写盘，HIGH-04）
-            com.suileyan.cloud.AccountDisplay.healAccountUidIfNeeded(account);
-            accountList.addView(createAccountRow(account));
-        }
+        // 账号列表涉及凭据解密（PBKDF2 600000 迭代，首次约 2 秒），后台加载避免主线程阻塞（启动黑屏）
+        com.suileyan.comm.Async.run("account-render", () -> {
+            var accounts = CloudAccountStore.list();
+            if (getActivity() == null) return;
+            getActivity().runOnUiThread(() -> {
+                if (!isAdded()) return;
+                accountList.removeAllViews();
+                if (accounts.isEmpty()) {
+                    tvEmpty.setVisibility(View.VISIBLE);
+                    return;
+                }
+                tvEmpty.setVisibility(View.GONE);
+                for (var account : accounts) {
+                    // 老账号 uid 回填放在刷新时机执行（展示函数不再写盘，HIGH-04）
+                    com.suileyan.cloud.AccountDisplay.healAccountUidIfNeeded(account);
+                    accountList.addView(createAccountRow(account));
+                }
+            });
+        });
     }
 
     /**

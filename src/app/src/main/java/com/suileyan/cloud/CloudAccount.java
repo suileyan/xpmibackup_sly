@@ -48,7 +48,8 @@ public class CloudAccount {
             var obj = new JSONObject();
             obj.put("id", id);
             obj.put("provider", provider);
-            obj.put("account", account);
+            // CRIT-02：account（139 手机号等 PII）明文不入文件；由 CloudAccountStore.save 写加密存储 account_label 键
+            obj.put("account", "");
             obj.put("name", name);
             obj.put("createdAt", createdAt);
             return obj;

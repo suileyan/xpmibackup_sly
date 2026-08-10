@@ -44,12 +44,16 @@ public final class EncryptedCredStore {
     private static final int GCM_TAG_BITS = 128;
     private static final int IV_LENGTH = 12;
     private static final int KEY_BITS = 256;
-    private static final int PBKDF2_ITERATIONS = 20000;
+    /** 当前 PBKDF2 迭代数（MED-01：OWASP 推荐 ≥600000，原 20000 过弱） */
+    private static final int PBKDF2_ITERATIONS = 600000;
+    /** 旧版迭代数：v2 数据用此值加密，读取旧数据时用于解密后自动迁移重加密 */
+    private static final int LEGACY_PBKDF2_ITERATIONS = 20000;
     private static final String KEY_SEED = "xp-mibackup-credential-v1";
     private static final String KEY_SALT = "salt";
     private static final String KEY_VERSION = "v";
     private static final String KEY_DATA = "data";
-    private static final int FORMAT_VERSION = 2;
+    /** 当前格式版本：v3 = PBKDF2 600000 迭代（MED-01） */
+    private static final int FORMAT_VERSION = 3;
     /** 解密缓存 TTL：超过该时长强制重新读盘，防止明文在进程内永久驻留 */
     private static final long CACHE_TTL_MS = 10 * 60 * 1000L;
 
@@ -67,9 +71,10 @@ public final class EncryptedCredStore {
     /** 缓存命中时间戳，用于 TTL 过期强制重读 */
     private static long cacheHitAt = 0L;
 
-    /** 派生密钥缓存：文件盐不变则密钥不变，避免每次加解密都跑一次 PBKDF2 */
+    /** 派生密钥缓存：文件盐+迭代数不变则密钥不变，避免每次加解密都跑一次 PBKDF2 */
     private static volatile SecretKey sDerivedKey;
     private static volatile String sDerivedKeySalt = "";
+    private static volatile int sDerivedKeyIterations = 0;
 
     private EncryptedCredStore() {
     }
@@ -78,15 +83,13 @@ public final class EncryptedCredStore {
         if (accountId == null || accountId.isEmpty() || key == null || key.isEmpty()) return;
         try {
             var store = loadStore();
-            // 旧格式（无盐）数据在首次写操作时升级重加密
-            if (store.salt == null) {
-                upgradeToSalted(store);
-            }
+            // 旧格式（无盐 / 旧迭代数）在首次写操作时升级
+            ensureLatestFormat(store);
             var dataKey = accountId + ":" + key;
             if (value == null || value.isEmpty()) {
                 store.data.remove(dataKey);
             } else {
-                store.data.put(dataKey, encrypt(value, store.salt));
+                store.data.put(dataKey, encrypt(value, store.salt, PBKDF2_ITERATIONS));
             }
             save(store);
             refreshCacheTs();
@@ -122,8 +125,16 @@ public final class EncryptedCredStore {
                 return CACHE.get(dataKey);
             }
             var store = loadStore();
+            // 按版本选择迭代数读取（不在此同步迁移：600000 次 PBKDF2 会阻塞主线程导致启动黑屏）；
+            // 旧格式由后台 warmUp/异步任务执行迁移重加密
+            var iterations = store.version >= FORMAT_VERSION ? PBKDF2_ITERATIONS : LEGACY_PBKDF2_ITERATIONS;
+            var t = System.currentTimeMillis();
             var enc = store.data.optString(dataKey, "");
-            var value = enc.isEmpty() ? "" : decrypt(enc, store.salt);
+            var value = enc.isEmpty() ? "" : decrypt(enc, store.salt, iterations);
+            var cost = System.currentTimeMillis() - t;
+            if (cost > 200) {
+                LogHelp.i(TAG, "STARTUP cred get slow: key=" + dataKey + " iter=" + iterations + " cost=" + cost + "ms");
+            }
             CACHE.put(dataKey, value);
             return value;
         } catch (Exception e) {
@@ -136,9 +147,7 @@ public final class EncryptedCredStore {
         if (accountId == null || accountId.isEmpty()) return;
         try {
             var store = loadStore();
-            if (store.salt == null) {
-                upgradeToSalted(store);
-            }
+            ensureLatestFormat(store);
             var prefix = accountId + ":";
             var keys = store.data.keys();
             var toRemove = new ArrayList<String>();
@@ -179,21 +188,55 @@ public final class EncryptedCredStore {
             var keys = store.data.keys();
             while (keys.hasNext()) {
                 var k = keys.next();
-                var plain = decrypt(store.data.optString(k, ""), null);
-                newData.put(k, encrypt(plain, saltB64));
+                var plain = decrypt(store.data.optString(k, ""), null, 0);
+                newData.put(k, encrypt(plain, saltB64, PBKDF2_ITERATIONS));
             }
             store.salt = saltB64;
             store.data = newData;
+            store.version = FORMAT_VERSION;
             LogHelp.i(TAG, "EncryptedCredStore upgraded to salted format");
         } catch (Exception e) {
             LogHelp.e(TAG, "upgrade creds to salted format failed", e);
         }
     }
 
-    /** 派生 AES 密钥：盐非空走 PBKDF2，盐为空（旧格式）回退单次 SHA-256 保证旧数据可读 */
-    private static SecretKey key(String salt) throws Exception {
+    /**
+     * 旧 v2（PBKDF2 20000 迭代）→ v3（600000 迭代）自动迁移：
+     * 用旧迭代数解密所有条目，再以新迭代数重加密，一次完成后格式版本升级（MED-01）
+     * 调用方必须保证已处于 synchronized 块内
+     */
+    private static void upgradeIterations(Store store) {
+        try {
+            var newData = new JSONObject();
+            var keys = store.data.keys();
+            while (keys.hasNext()) {
+                var k = keys.next();
+                var plain = decrypt(store.data.optString(k, ""), store.salt, LEGACY_PBKDF2_ITERATIONS);
+                newData.put(k, encrypt(plain, store.salt, PBKDF2_ITERATIONS));
+            }
+            store.data = newData;
+            store.version = FORMAT_VERSION;
+            LogHelp.i(TAG, "EncryptedCredStore upgraded iterations " + LEGACY_PBKDF2_ITERATIONS
+                    + " -> " + PBKDF2_ITERATIONS);
+        } catch (Exception e) {
+            LogHelp.e(TAG, "upgrade creds iterations failed", e);
+        }
+    }
+
+    /** 检测并执行存储格式升级（无盐→加盐；v2 迭代数→v3）。调用方须在 synchronized 内 */
+    private static void ensureLatestFormat(Store store) {
+        if (store.salt == null) {
+            upgradeToSalted(store);
+        } else if (store.version < FORMAT_VERSION) {
+            upgradeIterations(store);
+        }
+    }
+
+    /** 派生 AES 密钥：盐非空走 PBKDF2，盐为空（旧格式）回退单次 SHA-256 保证旧数据可读。
+     *  iterations：当前格式用 PBKDF2_ITERATIONS，旧 v2 数据读取用 LEGACY_PBKDF2_ITERATIONS（迁移用） */
+    private static SecretKey key(String salt, int iterations) throws Exception {
         var effectiveSalt = salt == null ? "" : salt;
-        if (sDerivedKey != null && effectiveSalt.equals(sDerivedKeySalt)) {
+        if (sDerivedKey != null && effectiveSalt.equals(sDerivedKeySalt) && iterations == sDerivedKeyIterations) {
             return sDerivedKey;
         }
         SecretKey derived;
@@ -201,19 +244,20 @@ public final class EncryptedCredStore {
             var digest = MessageDigest.getInstance("SHA-256");
             derived = new SecretKeySpec(digest.digest(KEY_SEED.getBytes(StandardCharsets.UTF_8)), "AES");
         } else {
-            var spec = new PBEKeySpec(KEY_SEED.toCharArray(), salt.getBytes(StandardCharsets.UTF_8), PBKDF2_ITERATIONS, KEY_BITS);
+            var spec = new PBEKeySpec(KEY_SEED.toCharArray(), salt.getBytes(StandardCharsets.UTF_8), iterations, KEY_BITS);
             derived = new SecretKeySpec(SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded(), "AES");
         }
         sDerivedKey = derived;
         sDerivedKeySalt = effectiveSalt;
+        sDerivedKeyIterations = iterations;
         return derived;
     }
 
-    private static String encrypt(String plain, String salt) throws Exception {
+    private static String encrypt(String plain, String salt, int iterations) throws Exception {
         var cipher = Cipher.getInstance(TRANSFORM);
         var iv = new byte[IV_LENGTH];
         SECURE_RANDOM.nextBytes(iv);
-        cipher.init(Cipher.ENCRYPT_MODE, key(salt), new GCMParameterSpec(GCM_TAG_BITS, iv));
+        cipher.init(Cipher.ENCRYPT_MODE, key(salt, iterations), new GCMParameterSpec(GCM_TAG_BITS, iv));
         var ct = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
         var out = new byte[IV_LENGTH + ct.length];
         System.arraycopy(iv, 0, out, 0, IV_LENGTH);
@@ -221,7 +265,7 @@ public final class EncryptedCredStore {
         return Base64.getEncoder().encodeToString(out);
     }
 
-    private static String decrypt(String enc, String salt) throws Exception {
+    private static String decrypt(String enc, String salt, int iterations) throws Exception {
         var raw = Base64.getDecoder().decode(enc);
         if (raw.length <= IV_LENGTH) throw new IllegalStateException("bad credential blob");
         var iv = new byte[IV_LENGTH];
@@ -229,36 +273,39 @@ public final class EncryptedCredStore {
         System.arraycopy(raw, 0, iv, 0, IV_LENGTH);
         System.arraycopy(raw, IV_LENGTH, ct, 0, ct.length);
         var cipher = Cipher.getInstance(TRANSFORM);
-        cipher.init(Cipher.DECRYPT_MODE, key(salt), new GCMParameterSpec(GCM_TAG_BITS, iv));
+        cipher.init(Cipher.DECRYPT_MODE, key(salt, iterations), new GCMParameterSpec(GCM_TAG_BITS, iv));
         return new String(cipher.doFinal(ct), StandardCharsets.UTF_8);
     }
 
-    /** 存储容器：data 为条目 JSON，salt 为空表示旧版无盐格式 */
+    /** 存储容器：data 为条目 JSON，salt 为空表示旧版无盐格式，version 为格式版本 */
     private static class Store {
         JSONObject data;
         String salt;
+        int version;
 
-        Store(JSONObject data, String salt) {
+        Store(JSONObject data, String salt, int version) {
             this.data = data;
             this.salt = salt;
+            this.version = version;
         }
     }
 
     private static Store loadStore() {
         try {
             var file = new File(CRED_FILE);
-            if (!file.exists()) return new Store(new JSONObject(), null);
+            if (!file.exists()) return new Store(new JSONObject(), null, 0);
             var root = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
             if (root.has(KEY_SALT)) {
                 var salt = root.optString(KEY_SALT, "");
                 var data = root.optJSONObject(KEY_DATA);
-                return new Store(data != null ? data : new JSONObject(), salt);
+                var version = root.optInt(KEY_VERSION, 2);
+                return new Store(data != null ? data : new JSONObject(), salt, version);
             }
-            // 旧格式：整个 root 就是条目
-            return new Store(root, null);
+            // 旧格式：整个 root 就是条目（无盐 v1）
+            return new Store(root, null, 1);
         } catch (Exception e) {
             LogHelp.e(TAG, "load creds failed", e);
-            return new Store(new JSONObject(), null);
+            return new Store(new JSONObject(), null, 0);
         }
     }
 
@@ -274,5 +321,40 @@ public final class EncryptedCredStore {
         } catch (Exception e) {
             LogHelp.e(TAG, "save creds failed", e);
         }
+    }
+
+    /** 迁移/预热任务是否已调度（进程内只迁移一次，幂等） */
+    private static volatile boolean sMigrationScheduled = false;
+
+    /**
+     * 后台预热 + 格式迁移（MED-01）：
+     * 600000 次 PBKDF2 较重，若在主线程同步执行会阻塞启动造成黑屏。
+     * 由 MainActivity 启动时异步调用；旧 v2 数据在此用旧迭代解密后以新迭代重加密（进程内仅一次）。
+     * get() 读取期间若尚未迁移完成，会按旧迭代数读取，保证功能不受影响。
+     */
+    public static void warmUp() {
+        if (sMigrationScheduled) return;
+        sMigrationScheduled = true;
+        com.suileyan.comm.Async.run("cred-migrate", () -> {
+            synchronized (EncryptedCredStore.class) {
+                try {
+                    var t0 = System.currentTimeMillis();
+                    var store = loadStore();
+                    if (store.version >= FORMAT_VERSION) {
+                        // 已是最新格式：仍预热派生密钥（否则主线程首次 get 会触发 600000 迭代派生，
+                        // 阻塞 2 秒造成启动黑屏——日志实测 iter=600000 cost=2062ms）
+                        key(store.salt, PBKDF2_ITERATIONS);
+                        LogHelp.i(TAG, "EncryptedCredStore warmUp key cached, cost=" + (System.currentTimeMillis() - t0) + "ms");
+                        return;
+                    }
+                    ensureLatestFormat(store);
+                    save(store);
+                    LogHelp.i(TAG, "EncryptedCredStore warmUp/migration done, version=" + FORMAT_VERSION
+                            + " cost=" + (System.currentTimeMillis() - t0) + "ms");
+                } catch (Exception e) {
+                    LogHelp.e(TAG, "EncryptedCredStore warmUp failed", e);
+                }
+            }
+        });
     }
 }

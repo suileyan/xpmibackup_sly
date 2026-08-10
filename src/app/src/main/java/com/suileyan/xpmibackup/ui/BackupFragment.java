@@ -45,6 +45,7 @@ public class BackupFragment extends Fragment {
      */
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        var t0 = System.currentTimeMillis();
         var view = inflater.inflate(R.layout.fragment_backup, container, false);
 
         rgBackupMethod = view.findViewById(R.id.rg_backup_method);
@@ -57,7 +58,7 @@ public class BackupFragment extends Fragment {
         btnStartBackup = view.findViewById(R.id.btn_start_backup);
 
         loadProfiles();
-        loadCloudAccounts();
+        loadCloudAccounts(this::restoreLastState);
 
         // listener 必须先注册，restoreLastState 里的 setChecked 才能触发面板切换
         rgBackupMethod.setOnCheckedChangeListener((group, checkedId) -> {
@@ -66,9 +67,8 @@ public class BackupFragment extends Fragment {
             panelCloud.setVisibility(nasSelected ? View.GONE : View.VISIBLE);
         });
 
-        restoreLastState();
-
         btnStartBackup.setOnClickListener(v -> startBackup());
+        com.suileyan.comm.LogHelp.i("XpMiBackup", "STARTUP BackupFragment onCreateView: " + (System.currentTimeMillis() - t0) + "ms");
         return view;
     }
 
@@ -78,8 +78,7 @@ public class BackupFragment extends Fragment {
      */
     public void refresh() {
         if (getView() == null) return;
-        loadCloudAccounts();
-        restoreLastState();
+        loadCloudAccounts(this::restoreLastState);
     }
 
     /**
@@ -105,17 +104,27 @@ public class BackupFragment extends Fragment {
     }
 
     /**
-     * 加载已登录云盘账号到下拉（显示「网盘名 · 脱敏账号」区分同网盘不同账户）
+     * 加载已登录云盘账号到下拉（显示「网盘名 · 脱敏账号」区分同网盘不同账户）。
+     * 账号列表涉及凭据解密（PBKDF2 600000 迭代，首次约 2 秒），后台加载避免主线程阻塞（启动黑屏）；
+     * 加载完成回调 onLoaded（用于恢复上次选择等依赖账号列表的逻辑）
      */
-    private void loadCloudAccounts() {
-        cloudAccounts = CloudAccountStore.list();
-        var names = new ArrayList<String>();
-        for (var a : cloudAccounts) {
-            names.add(com.suileyan.cloud.AccountDisplay.display(a));
-        }
-        var adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item, names);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        cloudSpinner.setAdapter(adapter);
+    private void loadCloudAccounts(Runnable onLoaded) {
+        com.suileyan.comm.Async.run("backup-load-cloud", () -> {
+            var accounts = CloudAccountStore.list();
+            if (getActivity() == null) return;
+            getActivity().runOnUiThread(() -> {
+                if (!isAdded()) return;
+                cloudAccounts = accounts;
+                var names = new ArrayList<String>();
+                for (var a : cloudAccounts) {
+                    names.add(com.suileyan.cloud.AccountDisplay.display(a));
+                }
+                var adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item, names);
+                adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+                cloudSpinner.setAdapter(adapter);
+                if (onLoaded != null) onLoaded.run();
+            });
+        });
     }
 
     /**
