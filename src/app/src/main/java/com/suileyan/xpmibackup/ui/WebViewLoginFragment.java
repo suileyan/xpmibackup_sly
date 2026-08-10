@@ -47,6 +47,7 @@ public class WebViewLoginFragment extends Fragment {
     public static final String PROVIDER_123 = "123";
     public static final String PROVIDER_189 = "189";
     public static final String PROVIDER_BAIDU = "baidu";
+    public static final String PROVIDER_WO = "wo";
     public static final String ARG_PROVIDER = "provider";
 
     /** 139 云盘登录页 */
@@ -61,6 +62,8 @@ public class WebViewLoginFragment extends Fragment {
     private static final String URL_189 = "https://cloud.189.cn/";
     /** 百度网盘登录页 */
     private static final String URL_BAIDU = "https://pan.baidu.com/";
+    /** 联通沃盘登录页 */
+    private static final String URL_WO = "https://pan.wo.cn/";
 
     /** 桌面版 User-Agent（电脑模式） */
     private static final String DESKTOP_UA =
@@ -131,6 +134,16 @@ public class WebViewLoginFragment extends Fragment {
             + "function scan(s){try{for(var i=0;i<s.length;i++){var v=s.getItem(s.key(i));pick(v);}}catch(e){}}"
             + "scan(window.localStorage);scan(window.sessionStorage);return best;})()";
 
+    /** 沃盘 localStorage 兜底提取脚本：扫描 access_token / refresh_token，返回 "access|||refresh"（仿光鸭） */
+    private static final String EXTRACT_JS_WO =
+            "(function(){var at='',rt='';function scan(s){try{for(var i=0;i<s.length;i++){"
+            + "var k=s.key(i);var v=s.getItem(k);try{var o=JSON.parse(v);"
+            + "if(o.access_token&&!at)at=o.access_token;if(o.refresh_token&&!rt)rt=o.refresh_token;"
+            + "}catch(e){if(k.toLowerCase().indexOf('token')>=0&&v.length>20){"
+            + "if(!at&&k.toLowerCase().indexOf('access')>=0)at=v;"
+            + "if(!rt&&k.toLowerCase().indexOf('refresh')>=0)rt=v;}}}}catch(e){}}"
+            + "scan(window.localStorage);return at+'|||'+rt;})()";
+
     private WebView webView;
     private Button btnDone;
     private String provider = PROVIDER_139;
@@ -146,6 +159,9 @@ public class WebViewLoginFragment extends Fragment {
     // ---- 123 云盘捕获状态 ----
     private volatile String captured123Bearer = "";
     private volatile boolean bearer123FromRequest = false;
+    // ---- 沃盘捕获状态 ----
+    private volatile String capturedWoToken = "";
+    private volatile String capturedWoRefresh = "";
 
     /**
      * 初始化界面：按网盘类型配置 WebView 并加载登录页
@@ -175,6 +191,8 @@ public class WebViewLoginFragment extends Fragment {
                 tvTitle.setText(R.string.title_webview_login_189);
             } else if (PROVIDER_BAIDU.equals(provider)) {
                 tvTitle.setText(R.string.title_webview_login_baidu);
+            } else if (PROVIDER_WO.equals(provider)) {
+                tvTitle.setText(R.string.title_webview_login_wo);
             } else {
                 tvTitle.setText(R.string.title_webview_login);
             }
@@ -262,6 +280,9 @@ public class WebViewLoginFragment extends Fragment {
                         var injected = fetchAndInjectDesktop(request.getUrl().toString());
                         if (injected != null) return injected;
                     }
+                } else if (PROVIDER_WO.equals(provider)) {
+                    // 沃盘：捕获 dispatcher 请求的 Accesstoken 头（登录后前端每个 API 请求必带）
+                    interceptWo(request);
                 } else {
                     intercept139(request);
                 }
@@ -349,6 +370,25 @@ public class WebViewLoginFragment extends Fragment {
                     // 百度：登录态在 Cookie（含 BDUSS），点「完成」时合并读取保存
                     var bdck = captureBaiduCookie();
                     LogHelp.d(TAG, "百度网盘 Cookie 就绪: len=" + (bdck != null ? bdck.length() : 0));
+                } else if (PROVIDER_WO.equals(provider)) {
+                    // 沃盘：主通道是 dispatcher 请求头拦截；此处 localStorage 兜底扫 access/refresh token
+                    view.evaluateJavascript(EXTRACT_JS_WO, value -> {
+                        if (value != null && value.contains("|||")) {
+                            var cleaned = value.replace("\"", "");
+                            var parts = cleaned.split("\\|\\|\\|");
+                            if (parts.length >= 2) {
+                                var at = parts[0].trim();
+                                var rt = parts[1].trim();
+                                if (!at.isEmpty() && at.length() > capturedWoToken.length()) {
+                                    capturedWoToken = at;
+                                    LogHelp.i(TAG, "沃盘 localStorage 提取到 access_token, len=" + at.length());
+                                }
+                                if (!rt.isEmpty()) {
+                                    capturedWoRefresh = rt;
+                                }
+                            }
+                        }
+                    });
                 } else {
                     view.evaluateJavascript(EXTRACT_JS_139, value -> {
                         if (value != null && value.toLowerCase().contains("basic")) {
@@ -370,7 +410,8 @@ public class WebViewLoginFragment extends Fragment {
                 : PROVIDER_QUARK.equals(provider) ? URL_QUARK
                 : PROVIDER_123.equals(provider) ? URL_123
                 : PROVIDER_189.equals(provider) ? URL_189
-                : PROVIDER_BAIDU.equals(provider) ? URL_BAIDU : URL_139);
+                : PROVIDER_BAIDU.equals(provider) ? URL_BAIDU
+                : PROVIDER_WO.equals(provider) ? URL_WO : URL_139);
 
         // 返回键：优先让 WebView 后退
         view.setFocusableInTouchMode(true);
@@ -588,6 +629,8 @@ public class WebViewLoginFragment extends Fragment {
             onDone189();
         } else if (PROVIDER_BAIDU.equals(provider)) {
             onDoneBaidu();
+        } else if (PROVIDER_WO.equals(provider)) {
+            onDoneWo();
         } else {
             onDone139();
         }
@@ -908,6 +951,109 @@ public class WebViewLoginFragment extends Fragment {
             finishSave();
         } catch (Exception e) {
             LogHelp.e(TAG, "save 百度 account failed", e);
+            Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 严格判断主机名是否属于联通沃盘（pan.wo.cn / panservice.mail.wo.cn，防相似域名，HIGH-18 风格） */
+    private static boolean isWoHost(String host) {
+        if (host == null) return false;
+        var h = host.toLowerCase(java.util.Locale.ROOT);
+        return h.equals("pan.wo.cn") || h.endsWith(".pan.wo.cn")
+                || h.equals("panservice.mail.wo.cn") || h.endsWith(".panservice.mail.wo.cn");
+    }
+
+    /**
+     * 沃盘：捕获 dispatcher 请求的 Accesstoken 请求头（登录后前端每个 dispatcher API 请求必带 UUID 形 token）
+     * 遍历全部请求头（不假设 key 大小写），只接受严格 host 下的请求（HIGH-18）
+     */
+    private void interceptWo(WebResourceRequest request) {
+        var host = request.getUrl().getHost();
+        if (host == null || !isWoHost(host)) return;
+        var headers = request.getRequestHeaders();
+        if (headers == null) return;
+        for (var entry : headers.entrySet()) {
+            var name = entry.getKey() == null ? "" : entry.getKey().toLowerCase(java.util.Locale.ROOT);
+            var value = entry.getValue() == null ? "" : entry.getValue().trim();
+            if (name.equals("accesstoken") && !value.isEmpty() && value.length() > capturedWoToken.length()) {
+                capturedWoToken = value;
+                LogHelp.i(TAG, "captured 沃盘 Accesstoken from request, host=" + host + " len=" + value.length());
+            }
+        }
+    }
+
+    /**
+     * 沃盘「完成」：token 为空则提示；后台 testConnection 通过后保存（幂等复用已存在沃盘账号 id）。
+     * 验证失败恢复旧 access_token（幂等复用场景，避免误删旧有效凭据，HIGH-01）
+     */
+    private void onDoneWo() {
+        var token = capturedWoToken;
+        if (token.isEmpty()) {
+            Toast.makeText(getActivity(), R.string.toast_webview_no_auth, Toast.LENGTH_LONG).show();
+            return;
+        }
+        LogHelp.i(TAG, "沃盘 token 捕获: len=" + token.length());
+        btnDone.setEnabled(false);
+        btnDone.setText(R.string.testing_connection);
+        var id = "wo_" + System.currentTimeMillis();
+        // 幂等：复用已存在沃盘账号 id，避免重复保存出现多个账号
+        var existing = CloudAccountStore.list().stream()
+                .filter(a -> CloudAccount.PROVIDER_WO.equals(a.provider))
+                .findFirst().orElse(null);
+        if (existing != null) id = existing.id;
+        var accountId = id;
+        // 幂等复用场景：先备份旧 access_token，验证失败时恢复而非删除账号（HIGH-01）
+        final var prevAt = existing != null ? EncryptedCredStore.get(accountId, "access_token") : null;
+        new Thread(() -> {
+            try {
+                // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
+                EncryptedCredStore.put(accountId, "access_token", token);
+                var provider = com.suileyan.cloud.ProviderRegistry.forAccount(
+                        new CloudAccount(accountId, CloudAccount.PROVIDER_WO, "", "", System.currentTimeMillis()));
+                var ok = provider != null && provider.testConnection();
+                if (getActivity() == null) return;
+                getActivity().runOnUiThread(() -> {
+                    btnDone.setEnabled(true);
+                    btnDone.setText(R.string.webview_login_done);
+                    if (ok) {
+                        saveAccountWo(accountId);
+                    } else {
+                        if (prevAt != null && !prevAt.isEmpty()) {
+                            EncryptedCredStore.put(accountId, "access_token", prevAt);
+                            LogHelp.w(TAG, "沃盘验证失败，已恢复旧 access_token: " + accountId);
+                        } else {
+                            EncryptedCredStore.removeAccount(accountId);
+                        }
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                LogHelp.e(TAG, "沃盘验证失败", e);
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> {
+                        btnDone.setEnabled(true);
+                        btnDone.setText(R.string.webview_login_done);
+                        Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
+                    });
+                }
+            }
+        }, "XpMiBackup-wo-validate").start();
+    }
+
+    /** 保存沃盘账号（access_token + 可选 refresh_token 加密存储；uid 留空展示「联通沃盘」） */
+    private void saveAccountWo(String id) {
+        try {
+            CloudAccountStore.add(new CloudAccount(id, CloudAccount.PROVIDER_WO, "",
+                    getString(R.string.cloud_provider_wo), System.currentTimeMillis()));
+            EncryptedCredStore.put(id, "access_token", capturedWoToken);
+            if (capturedWoRefresh != null && !capturedWoRefresh.isEmpty()) {
+                EncryptedCredStore.put(id, "refresh_token", capturedWoRefresh);
+            }
+            LogHelp.i(TAG, "沃盘账号已保存: " + id
+                    + " refresh=" + (capturedWoRefresh != null && !capturedWoRefresh.isEmpty()));
+            finishSave();
+        } catch (Exception e) {
+            LogHelp.e(TAG, "save 沃盘 account failed", e);
             Toast.makeText(getActivity(), R.string.toast_cloud_account_save_failed, Toast.LENGTH_LONG).show();
         }
     }
