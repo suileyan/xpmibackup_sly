@@ -108,6 +108,8 @@ public class TianyiProvider implements CloudProvider {
     private static final long RSA_KEY_TTL_MS = 3600L * 1000;
     /** InvalidAccessToken/InvalidSessionKey 自愈重试上限 */
     private static final int MAX_SESSION_RETRY = 3;
+    /** 上传域临时故障（511 S3 网关超时/5xx/code=-1）退避重试次数 */
+    private static final int MAX_TEMP_RETRY = 2;
 
     private final CloudAccount account;
     /** ensureSession 单飞锁：防 refreshToken 一次性轮换并发（对齐 Guangya REFRESH_LOCK 思路） */
@@ -534,7 +536,7 @@ public class TianyiProvider implements CloudProvider {
                 params.put("sliceSize", String.valueOf(sliceSize));
                 params.put("fileMd5", md5s.fileMd5);
                 params.put("sliceMd5", md5s.fileMd5);
-                var init = uploadGet("/person/initMultiUpload", params);
+                var init = uploadGetChecked("/person/initMultiUpload", params);
                 checkUploadCode(init);
                 var data = init.optJSONObject("data");
                 if (data == null) {
@@ -556,7 +558,7 @@ public class TianyiProvider implements CloudProvider {
                 commit.put("fileMd5", md5s.fileMd5);
                 commit.put("sliceMd5", md5s.fileMd5);
                 commit.put("uploadFileId", uploadFileId);
-                checkUploadCode(uploadGet("/person/commitMultiUploadFile", commit));
+                checkUploadCode(uploadGetChecked("/person/commitMultiUploadFile", commit));
             } else {
                 // ---- 多分片 ----
                 var sliceMd5 = md5Hex(String.join("\n", md5s.chunkMd5s));
@@ -566,7 +568,7 @@ public class TianyiProvider implements CloudProvider {
                 params.put("fileSize", String.valueOf(size));
                 params.put("sliceSize", String.valueOf(sliceSize));
                 params.put("lazyCheck", "1");
-                var init = uploadGet("/person/initMultiUpload", params);
+                var init = uploadGetChecked("/person/initMultiUpload", params);
                 checkUploadCode(init);
                 var data = init.optJSONObject("data");
                 if (data == null) {
@@ -580,7 +582,7 @@ public class TianyiProvider implements CloudProvider {
                 check.put("fileMd5", md5s.fileMd5);
                 check.put("sliceMd5", sliceMd5);
                 check.put("uploadFileId", uploadFileId);
-                var sec = uploadGet("/person/checkTransSecond", check);
+                var sec = uploadGetChecked("/person/checkTransSecond", check);
                 checkUploadCode(sec);
                 var secData = sec.optJSONObject("data");
                 if (secData != null && dataExists(secData)) {
@@ -616,7 +618,7 @@ public class TianyiProvider implements CloudProvider {
                 commit.put("sliceMd5", sliceMd5);
                 commit.put("uploadFileId", uploadFileId);
                 commit.put("lazyCheck", "1");
-                checkUploadCode(uploadGet("/person/commitMultiUploadFile", commit));
+                checkUploadCode(uploadGetChecked("/person/commitMultiUploadFile", commit));
             }
             if (cb != null) cb.onFinish(taskId, 0, "success");
         } catch (CloudException e) {
@@ -636,38 +638,42 @@ public class TianyiProvider implements CloudProvider {
 
     /** 单分片 PUT 直传（requestHeader 由服务端签发，逐项透传不覆盖） */
     private void uploadPart(int partNumber, String partInfo, String uploadFileId, File file, long offset, int len) throws CloudException {
-        var params = new LinkedHashMap<String, String>();
-        params.put("partInfo", partInfo);
-        params.put("uploadFileId", uploadFileId);
-        var json = uploadGet("/person/getMultiUploadUrls", params);
-        checkUploadCode(json);
-        var urls = json.optJSONObject("uploadUrls");
-        if (urls == null) {
-            throw new CloudException(CloudException.Kind.REMOTE, "189 getMultiUploadUrls 缺少 uploadUrls");
-        }
-        var meta = urls.optJSONObject("partNumber_" + partNumber);
-        if (meta == null) {
-            throw new CloudException(CloudException.Kind.REMOTE, "189 getMultiUploadUrls 缺少 partNumber_" + partNumber);
-        }
-        var requestURL = meta.optString("requestURL", "");
-        var requestHeader = meta.optString("requestHeader", "");
-        if (requestURL.isEmpty()) {
-            throw new CloudException(CloudException.Kind.REMOTE, "189 分片上传缺少 requestURL");
-        }
-        var builder = new Request.Builder().url(requestURL);
-        for (var pair : requestHeader.split("&")) {
-            var t = pair.trim();
-            if (t.isEmpty()) continue;
-            var eq = t.indexOf('=');
-            if (eq <= 0) continue;
-            builder.header(t.substring(0, eq), t.substring(eq + 1));
-        }
-        builder.put(partBody(file, offset, len));
-        var resp = execute(builder.build());
-        if (resp.code < 200 || resp.code >= 300) {
-            throw new CloudException(CloudException.Kind.REMOTE,
-                    "189 分片 PUT HTTP " + resp.code + ": " + truncate(resp.body, 300));
-        }
+        // 分片整体走 uploadApi 临时重试：getMultiUploadUrls 或 PUT 遇到 511/5xx 时重传该分片
+        uploadApi(() -> {
+            var params = new LinkedHashMap<String, String>();
+            params.put("partInfo", partInfo);
+            params.put("uploadFileId", uploadFileId);
+            var json = uploadGet("/person/getMultiUploadUrls", params);
+            checkUploadCode(json);
+            var urls = json.optJSONObject("uploadUrls");
+            if (urls == null) {
+                throw new CloudException(CloudException.Kind.REMOTE, "189 getMultiUploadUrls 缺少 uploadUrls");
+            }
+            var meta = urls.optJSONObject("partNumber_" + partNumber);
+            if (meta == null) {
+                throw new CloudException(CloudException.Kind.REMOTE, "189 getMultiUploadUrls 缺少 partNumber_" + partNumber);
+            }
+            var requestURL = meta.optString("requestURL", "");
+            var requestHeader = meta.optString("requestHeader", "");
+            if (requestURL.isEmpty()) {
+                throw new CloudException(CloudException.Kind.REMOTE, "189 分片上传缺少 requestURL");
+            }
+            var builder = new Request.Builder().url(requestURL);
+            for (var pair : requestHeader.split("&")) {
+                var t = pair.trim();
+                if (t.isEmpty()) continue;
+                var eq = t.indexOf('=');
+                if (eq <= 0) continue;
+                builder.header(t.substring(0, eq), t.substring(eq + 1));
+            }
+            builder.put(partBody(file, offset, len));
+            var resp = execute(builder.build());
+            if (resp.code < 200 || resp.code >= 300) {
+                throw new CloudException(CloudException.Kind.REMOTE,
+                        "189 分片 PUT HTTP " + resp.code + ": " + truncate(resp.body, 300));
+            }
+            return json;
+        });
     }
 
     /** 流式读文件区间作为 PUT body */
@@ -936,7 +942,8 @@ public class TianyiProvider implements CloudProvider {
         });
     }
 
-    /** upload.cloud.189.cn GET（signatureUpload：AES 参数 + RSA 加密 uuid + HMAC 签名） */
+    /** upload.cloud.189.cn GET（signatureUpload：AES 参数 + RSA 加密 uuid + HMAC 签名）。
+     * 纯执行层：会话自愈 by withRetry；上传域临时故障重试统一走 uploadGetChecked */
     private JSONObject uploadGet(String path, LinkedHashMap<String, String> params) throws CloudException {
         return withRetry(() -> {
             var time = String.valueOf(System.currentTimeMillis());
@@ -968,14 +975,60 @@ public class TianyiProvider implements CloudProvider {
         });
     }
 
-    /** 上传接口 code 字段非 0 判定失败（code 可能为数字或字符串，统一转字符串判断） */
+    /** 上传域 GET + code 校验：checkUploadCode 抛的 code=-1 也纳入 uploadApi 临时重试（511/code=-1 单层退避重试） */
+    private JSONObject uploadGetChecked(String path, LinkedHashMap<String, String> params) throws CloudException {
+        return uploadApi(() -> {
+            var json = uploadGet(path, params);
+            checkUploadCode(json);
+            return json;
+        });
+    }
+
+    /** 上传域临时故障重试：189 S3 网关偶发 511（Read timed out）/HTTP 5xx/接口 code=-1，指数退避重试 */
+    private JSONObject uploadApi(java.util.concurrent.Callable<JSONObject> call) throws CloudException {
+        var last = (CloudException) null;
+        for (var attempt = 0; attempt <= MAX_TEMP_RETRY; attempt++) {
+            try {
+                return call.call();
+            } catch (CloudException e) {
+                last = e;
+                if (!isTempFailure(e) || attempt >= MAX_TEMP_RETRY) throw e;
+                var sleep = Math.min(500L << attempt, 4000L);
+                try {
+                    Thread.sleep(sleep);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+                LogHelp.w(TAG, "189 上传域临时故障重试(" + (attempt + 1) + "/" + MAX_TEMP_RETRY
+                        + "): " + e.getMessage());
+            } catch (Exception e) {
+                throw new CloudException(CloudException.Kind.REMOTE, e);
+            }
+        }
+        throw last;
+    }
+
+    /** 上传域临时故障判定：511（S3 网关超时）/HTTP 5xx/接口 code=-1 */
+    private static boolean isTempFailure(CloudException e) {
+        var m = e.getMessage();
+        if (m == null) return false;
+        return m.contains("HTTP 511") || m.contains("HTTP 5")
+                || m.contains("code=-1") || m.contains("code = -1");
+    }
+
+    /** 上传接口 code 字段判定失败：成功值为 "0" 或 "SUCCESS"（189 上传接口返回字符串 SUCCESS），
+     * 其余非空值判失败（code 可能为数字或字符串，统一转字符串判断） */
     private void checkUploadCode(JSONObject json) throws CloudException {
         if (json.has("code")) {
             var code = json.opt("code");
-            if (code != null && !"0".equals(String.valueOf(code))) {
-                throw new CloudException(CloudException.Kind.REMOTE,
-                        "189 上传接口错误 code=" + code
-                                + ": " + json.optString("message", json.optString("errorMsg", "")));
+            if (code != null) {
+                var s = String.valueOf(code).trim();
+                if (!s.isEmpty() && !"0".equals(s) && !"SUCCESS".equalsIgnoreCase(s)) {
+                    throw new CloudException(CloudException.Kind.REMOTE,
+                            "189 上传接口错误 code=" + code
+                                    + ": " + json.optString("message", json.optString("errorMsg", "")));
+                }
             }
         }
     }
