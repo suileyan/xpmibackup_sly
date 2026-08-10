@@ -20,8 +20,8 @@ android {
         applicationId "com.suileyan.xpmibackup"
         minSdk 28
         targetSdk 36
-        versionCode 700
-        versionName "0.7.0"
+        versionCode 701
+        versionName "0.7.1"
     }
 
     // signingConfigs 必须在 buildTypes 之前声明（NEW-H-04）：
