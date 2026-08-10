@@ -52,8 +52,13 @@ public class ServiceConfigFragment extends Fragment {
     private Spinner profileSpinner;
     private EditText etProfileName;
     private RadioGroup rgProtocol;
-    private RadioButton rbSmb, rbWebdav, rbCustom;
-    private LinearLayout panelSmb, panelWebdav, panelCustom;
+    private RadioButton rbSmb, rbWebdav;
+    private LinearLayout panelSmb, panelWebdav;
+    private TextView tabNas, tabCustom;
+    private LinearLayout containerNas, containerCustom;
+    private LinearLayout containerScriptVars;
+    private TextView tvScriptVarsTitle, tvScriptVarsHint;
+    private TextView tvScriptHelp;
     private EditText etUploadThreads, etChunkSizeMb;
     private EditText etSmbServer, etSmbPort, etSmbShare, etSmbUser, etSmbPass;
     private EditText etWebdavUrl, etWebdavUser, etWebdavPass;
@@ -78,10 +83,17 @@ public class ServiceConfigFragment extends Fragment {
         rgProtocol = view.findViewById(R.id.rg_protocol);
         rbSmb = view.findViewById(R.id.rb_smb);
         rbWebdav = view.findViewById(R.id.rb_webdav);
-        rbCustom = view.findViewById(R.id.rb_custom);
         panelSmb = view.findViewById(R.id.panel_smb);
         panelWebdav = view.findViewById(R.id.panel_webdav);
-        panelCustom = view.findViewById(R.id.panel_custom);
+        tabNas = view.findViewById(R.id.tab_nas);
+        tabCustom = view.findViewById(R.id.tab_custom);
+        containerNas = view.findViewById(R.id.container_nas);
+        containerCustom = view.findViewById(R.id.container_custom);
+        containerScriptVars = view.findViewById(R.id.container_script_vars);
+        tvScriptVarsTitle = view.findViewById(R.id.tv_script_vars_title);
+        tvScriptVarsHint = view.findViewById(R.id.tv_script_vars_hint);
+        tvScriptHelp = view.findViewById(R.id.tv_script_help);
+        tvScriptHelp.setPaintFlags(tvScriptHelp.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
         etUploadThreads = view.findViewById(R.id.et_upload_threads);
         etChunkSizeMb = view.findViewById(R.id.et_chunk_size_mb);
         etSmbServer = view.findViewById(R.id.et_smb_server);
@@ -94,9 +106,12 @@ public class ServiceConfigFragment extends Fragment {
         etWebdavPass = view.findViewById(R.id.et_webdav_pass);
         etCustomScript = view.findViewById(R.id.et_custom_script);
         etCustomScript.setVerticalScrollBarEnabled(true);
+        // 智能滚动协调：脚本内容可内部滚动时才拦截父级 ScrollView（否则页面可下滑，
+        // 用户能看到下方脚本配置项与保存按钮；脚本滚到底后继续滑动也交还页面）
         etCustomScript.setOnTouchListener((v, event) -> {
-            v.getParent().requestDisallowInterceptTouchEvent(true);
-            if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+            if (event.getAction() == MotionEvent.ACTION_DOWN || event.getAction() == MotionEvent.ACTION_MOVE) {
+                v.getParent().requestDisallowInterceptTouchEvent(etCustomScript.canScrollVertically(1));
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
                 v.getParent().requestDisallowInterceptTouchEvent(false);
             }
             return false;
@@ -104,6 +119,30 @@ public class ServiceConfigFragment extends Fragment {
         btnSave = view.findViewById(R.id.btn_save);
         testingPanel = view.findViewById(R.id.testing_panel);
 
+        tabNas.setOnClickListener(v -> {
+            showTab(false);
+            refreshSpinnerForActiveTab();
+        });
+        tabCustom.setOnClickListener(v -> {
+            showTab(true);
+            refreshSpinnerForActiveTab();
+        });
+        tvScriptHelp.setOnClickListener(v -> openScriptHelp());
+        // 脚本内容变化 → 重新扫描占位符 → 重建动态配置项（保留已填值）
+        etCustomScript.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+                rebuildScriptVars();
+            }
+        });
         rgProtocol.setOnCheckedChangeListener((group, checkedId) -> showProtocolPanel(checkedId));
         btnSave.setOnClickListener(v -> saveAndTest());
         ((TextView) view.findViewById(R.id.tv_footer)).setOnClickListener(v -> {
@@ -122,8 +161,6 @@ public class ServiceConfigFragment extends Fragment {
      */
     private void loadConfig() {
         profiles = ProfileStore.list();
-        var activeId = ProfileStore.getActiveId();
-        refreshSpinner(activeId);
 
         // 全局配置
         var cfg = com.suileyan.comm.ConfigHelp.load();
@@ -132,25 +169,36 @@ public class ServiceConfigFragment extends Fragment {
 
         var active = ProfileStore.getActive();
         if (active != null) {
-            applyProfileToForm(active);
+            // 先按激活方案类型定选项卡，再刷新对应类型下拉（setSelection 触发 onItemSelected → applyProfileToForm）
+            var isScript = Profile.TYPE_SCRIPT.equals(active.type);
+            showTab(isScript);
+            refreshSpinner(active.id, isScript);
         } else {
             // 无方案（当前为未保存的配置）：命名自动为「新配置」，引导用户可命名并保存为多套配置之一
             etProfileName.setText(R.string.profile_unsaved_name);
+            showTab(false);
+            refreshSpinner("", false);
             rbSmb.setChecked(true);
             showProtocolPanel(R.id.rb_smb);
         }
     }
 
     /**
-     * 刷新方案下拉列表并选中指定方案
+     * 刷新方案下拉列表并选中指定方案。
+     * 下拉只显示指定选项卡类型的方案：NAS 配置（custom=false）→ smb/webdav；自定义配置（custom=true）→ script
      */
-    private void refreshSpinner(String selectedId) {
-        var names = new ArrayList<String>();
+    private void refreshSpinner(String selectedId, boolean custom) {
+        var filtered = new ArrayList<Profile>();
         for (var p : profiles) {
+            var isScript = Profile.TYPE_SCRIPT.equals(p.type);
+            if (custom == isScript) filtered.add(p);
+        }
+        var names = new ArrayList<String>();
+        for (var p : filtered) {
             names.add(p.name != null && !p.name.isEmpty() ? p.name : typeLabel(p.type));
         }
         if (names.isEmpty()) {
-            // 无任何已保存方案：下拉显示「新配置」占位，与命名区一致，引导多配置管理
+            // 当前选项卡下无已保存方案：下拉显示「新配置」占位，与命名区一致，引导多配置管理
             names.add(getString(R.string.profile_unsaved_name));
         }
         var adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item, names);
@@ -158,21 +206,21 @@ public class ServiceConfigFragment extends Fragment {
         profileSpinner.setAdapter(adapter);
 
         var index = -1;
-        for (var i = 0; i < profiles.size(); i++) {
-            if (profiles.get(i).id.equals(selectedId)) {
+        for (var i = 0; i < filtered.size(); i++) {
+            if (filtered.get(i).id.equals(selectedId)) {
                 index = i;
                 break;
             }
         }
-        if (index < 0 && profiles.size() > 0) index = 0;
+        if (index < 0 && filtered.size() > 0) index = 0;
         profileSpinner.setSelection(Math.max(index, 0));
 
         // 切换方案：加载该方案到表单并设为激活
         profileSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
-                if (position < 0 || position >= profiles.size()) return;
-                var profile = profiles.get(position);
+                if (position < 0 || position >= filtered.size()) return;
+                var profile = filtered.get(position);
                 if (profile.id.equals(editingProfileId)) return;
                 ProfileStore.setActive(profile.id);
                 ProviderRegistry.invalidateAll();
@@ -195,10 +243,14 @@ public class ServiceConfigFragment extends Fragment {
         etProfileName.setText(profile.name);
 
         var protocol = profile.type;
-        rbSmb.setChecked(Profile.TYPE_SMB.equals(protocol));
-        rbWebdav.setChecked(Profile.TYPE_WEBDAV.equals(protocol));
-        rbCustom.setChecked(Profile.TYPE_SCRIPT.equals(protocol));
-        showProtocolPanel(protocolCheckedId(protocol));
+        var isScript = Profile.TYPE_SCRIPT.equals(protocol);
+        // 脚本方案切到「自定义配置」选项卡；NAS 方案切回 NAS 选项卡并按协议勾选
+        showTab(isScript);
+        if (!isScript) {
+            rbSmb.setChecked(Profile.TYPE_SMB.equals(protocol));
+            rbWebdav.setChecked(Profile.TYPE_WEBDAV.equals(protocol));
+            // RadioGroup 勾选已触发 onCheckedChangeListener → showProtocolPanel，无需显式调用
+        }
 
         etSmbServer.setText(profile.params.getOrDefault("smb_server", ""));
         etSmbPort.setText(profile.params.getOrDefault("smb_port", "445"));
@@ -265,6 +317,7 @@ public class ServiceConfigFragment extends Fragment {
         snapshot.smbPass = etSmbPass.getText().toString();
         snapshot.webdavPass = etWebdavPass.getText().toString();
         snapshot.customScript = encodeScript(etCustomScript.getText().toString());
+        snapshot.scriptVars = collectScriptVars();
 
         // 后台线程命名，便于排查（NEW-L-11）
         new Thread(() -> {
@@ -291,6 +344,8 @@ public class ServiceConfigFragment extends Fragment {
         String smbPass;
         String webdavPass;
         String customScript;
+        /** 脚本占位符配置项（name → value），写入 EncryptedCredStore 的 script_var_<name> */
+        Map<String, String> scriptVars;
     }
 
     /** 用快照构造临时方案测试连接（后台线程调用）；记录开始/结果/耗时与主机参数（不含任何凭据） */
@@ -301,6 +356,11 @@ public class ServiceConfigFragment extends Fragment {
             EncryptedCredStore.put(TEST_KEY, "smb_pass", snapshot.smbPass);
             EncryptedCredStore.put(TEST_KEY, "webdav_pass", snapshot.webdavPass);
             EncryptedCredStore.put(TEST_KEY, "custom_script_b64", snapshot.customScript);
+            if (snapshot.scriptVars != null) {
+                for (var e : snapshot.scriptVars.entrySet()) {
+                    EncryptedCredStore.put(TEST_KEY, "script_var_" + e.getKey(), e.getValue());
+                }
+            }
             var tmpProfile = new Profile(TEST_KEY, "test", snapshot.type, System.currentTimeMillis(), snapshot.params);
             var ok = newProvider(snapshot.type, tmpProfile).testConnection();
             LogHelp.i(TAG, "NAS test " + (ok ? "OK" : "FAILED") + " type=" + snapshot.type
@@ -372,12 +432,17 @@ public class ServiceConfigFragment extends Fragment {
             EncryptedCredStore.put(saved.id, "smb_pass", snapshot.smbPass);
             EncryptedCredStore.put(saved.id, "webdav_pass", snapshot.webdavPass);
             EncryptedCredStore.put(saved.id, "custom_script_b64", snapshot.customScript);
+            if (snapshot.scriptVars != null) {
+                for (var e : snapshot.scriptVars.entrySet()) {
+                    EncryptedCredStore.put(saved.id, "script_var_" + e.getKey(), e.getValue());
+                }
+            }
             ProfileStore.setActive(saved.id);
             ProviderRegistry.invalidateAll();
 
             editingProfileId = saved.id;
             profiles = ProfileStore.list();
-            refreshSpinner(saved.id);
+            refreshSpinner(saved.id, Profile.TYPE_SCRIPT.equals(saved.type));
         } catch (Exception e) {
             LogHelp.e(TAG, "save profile failed: " + e.getMessage(), e);
         }
@@ -404,27 +469,115 @@ public class ServiceConfigFragment extends Fragment {
 
     // ========== UI 工具 ==========
 
-    private void showProtocolPanel(int checkedId) {
-        panelSmb.setVisibility(View.GONE);
-        panelWebdav.setVisibility(View.GONE);
-        panelCustom.setVisibility(View.GONE);
-        if (checkedId == R.id.rb_custom) {
-            panelCustom.setVisibility(View.VISIBLE);
-        } else if (checkedId == R.id.rb_webdav) {
-            panelWebdav.setVisibility(View.VISIBLE);
-        } else {
-            panelSmb.setVisibility(View.VISIBLE);
+    /** 切换「NAS 配置 / 自定义配置」选项卡（脚本为独立选项卡，不再作为协议单选）。
+     * 仅切换 UI 状态；下拉刷新由调用方显式触发（避免 setSelection→onItemSelected→applyProfileToForm→showTab 循环） */
+    private void showTab(boolean custom) {
+        tabNas.setSelected(!custom);
+        tabCustom.setSelected(custom);
+        tabNas.setBackgroundResource(custom ? R.drawable.bg_tab_normal : R.drawable.bg_tab_selected);
+        tabCustom.setBackgroundResource(custom ? R.drawable.bg_tab_selected : R.drawable.bg_tab_normal);
+        containerNas.setVisibility(custom ? View.GONE : View.VISIBLE);
+        containerCustom.setVisibility(custom ? View.VISIBLE : View.GONE);
+        tabNas.setTextColor(getResources().getColor(custom ? R.color.text_disabled : R.color.primary_text_on));
+        tabCustom.setTextColor(getResources().getColor(custom ? R.color.primary_text_on : R.color.text_disabled));
+        // 「如何自定义脚本」链接仅自定义配置选项卡显示（NAS 选项卡无脚本上下文）
+        tvScriptHelp.setVisibility(custom ? View.VISIBLE : View.GONE);
+    }
+
+    /** 按当前选项卡刷新下拉：选中该类型下当前激活方案（不在该类型则回退第一个） */
+    private void refreshSpinnerForActiveTab() {
+        var custom = tabCustom.isSelected();
+        var active = ProfileStore.getActive();
+        refreshSpinner(active != null && (Profile.TYPE_SCRIPT.equals(active.type) == custom)
+                ? active.id : "", custom);
+    }
+
+    /**
+     * 扫描脚本中的 %*名称*% 占位符，为每个占位符生成配置项输入框（值加密存 script_var_<name>）。
+     * 重建时保留已填值；新占位符从 EncryptedCredStore 回填
+     */
+    private void rebuildScriptVars() {
+        if (containerScriptVars == null) return;
+        var scriptText = etCustomScript.getText().toString();
+        var names = CustomHttpFileHelp.extractScriptPlaceholders(scriptText);
+
+        // 保留当前已填值（编辑脚本时用户输入不丢失）
+        var current = new LinkedHashMap<String, String>();
+        for (var i = 0; i < containerScriptVars.getChildCount(); i++) {
+            var child = containerScriptVars.getChildAt(i);
+            if (child instanceof LinearLayout row && row.getTag() instanceof String name) {
+                var et = (EditText) row.findViewById(R.id.et_script_var);
+                if (et != null) current.put(name, et.getText().toString());
+            }
+        }
+
+        containerScriptVars.removeAllViews();
+        var show = !names.isEmpty();
+        tvScriptVarsTitle.setVisibility(show ? View.VISIBLE : View.GONE);
+        tvScriptVarsHint.setVisibility(show ? View.VISIBLE : View.GONE);
+        containerScriptVars.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) return;
+
+        for (var name : names) {
+            var row = new LinearLayout(getActivity());
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setTag(name);
+
+            var label = new TextView(getActivity());
+            label.setText(name);
+            label.setTextSize(13f);
+            label.setTextColor(getResources().getColor(R.color.text_secondary));
+            row.addView(label);
+
+            var et = new EditText(getActivity());
+            et.setId(R.id.et_script_var);
+            et.setSingleLine(true);
+            et.setTextSize(14f);
+            et.setTextColor(getResources().getColor(R.color.text_primary));
+            et.setHintTextColor(getResources().getColor(R.color.text_hint));
+            et.setBackgroundResource(R.drawable.bg_input);
+            et.setPadding(dp(12), dp(8), dp(12), dp(8));
+            // 已填值优先；否则回填加密存储中的旧值（加载方案场景）
+            var value = current.containsKey(name) ? current.get(name)
+                    : EncryptedCredStore.get(editingProfileId, "script_var_" + name);
+            if (value == null) value = "";
+            et.setText(value);
+            var lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = dp(16);
+            row.addView(et, lp);
+            containerScriptVars.addView(row);
         }
     }
 
-    private int protocolCheckedId(String protocol) {
-        if (ScriptProvider.TYPE.equals(protocol)) return R.id.rb_custom;
-        if (WebdavProvider.TYPE.equals(protocol)) return R.id.rb_webdav;
-        return R.id.rb_smb;
+    /** 收集脚本占位符配置项值（name → value，不含空值） */
+    private Map<String, String> collectScriptVars() {
+        var map = new LinkedHashMap<String, String>();
+        if (containerScriptVars == null) return map;
+        for (var i = 0; i < containerScriptVars.getChildCount(); i++) {
+            var child = containerScriptVars.getChildAt(i);
+            if (child instanceof LinearLayout row && row.getTag() instanceof String name) {
+                var et = (EditText) row.findViewById(R.id.et_script_var);
+                if (et != null) {
+                    var v = et.getText().toString().trim();
+                    if (!v.isEmpty()) map.put(name, v);
+                }
+            }
+        }
+        return map;
+    }
+
+    private int dp(int v) {
+        return Math.round(getResources().getDisplayMetrics().density * v);
+    }
+
+    private void showProtocolPanel(int checkedId) {
+        panelSmb.setVisibility(checkedId == R.id.rb_webdav ? View.GONE : View.VISIBLE);
+        panelWebdav.setVisibility(checkedId == R.id.rb_webdav ? View.VISIBLE : View.GONE);
     }
 
     private String selectedProtocol() {
-        if (rbCustom.isChecked()) return ScriptProvider.TYPE;
+        if (tabCustom.isSelected()) return ScriptProvider.TYPE;
         if (rbWebdav.isChecked()) return WebdavProvider.TYPE;
         return SmbProvider.TYPE;
     }
@@ -434,6 +587,22 @@ public class ServiceConfigFragment extends Fragment {
         if (Profile.TYPE_WEBDAV.equals(type)) return getString(R.string.account_type_webdav);
         if (Profile.TYPE_SCRIPT.equals(type)) return getString(R.string.account_type_custom);
         return type;
+    }
+
+    /** 打开「如何自定义脚本」帮助页（overlay 二级页面，与云盘登录页同款动画/返回栈） */
+    private void openScriptHelp() {
+        var help = new ScriptHelpFragment();
+        var ft = getFragmentManager().beginTransaction();
+        var overlay = getActivity() != null ? getActivity().findViewById(R.id.overlay_container) : null;
+        if (overlay != null) {
+            overlay.setTranslationX(0f);
+            overlay.setVisibility(View.VISIBLE);
+        }
+        ft.setCustomAnimations(R.animator.slide_in_right, R.animator.no_anim,
+                R.animator.no_anim, R.animator.no_anim);
+        ft.add(R.id.overlay_container, help);
+        ft.addToBackStack("script-help");
+        ft.commit();
     }
 
     private static String encodeScript(String script) {

@@ -67,6 +67,25 @@
     <string name="test_and_save_config">保存并测试配置</string>
     <string name="testing_connection">正在测试连接…</string>
 
+    <!-- NAS 配置页：选项卡与配置项说明 -->
+    <string name="service_tab_nas">NAS 配置</string>
+    <string name="service_tab_custom">自定义配置</string>
+    <string name="desc_profile_name">为当前配置方案命名，可保存多套方案随时切换</string>
+    <string name="desc_upload_threads">并发上传线程数，越大越占带宽</string>
+    <string name="desc_chunk_size">按此大小分片上传，0 表示不分片</string>
+    <string name="desc_smb_server">NAS 的 IP 地址或域名</string>
+    <string name="desc_smb_port">SMB 服务端口，默认 445</string>
+    <string name="desc_share_folder">NAS 上共享的目录名，不含路径分隔符</string>
+    <string name="desc_username">NAS 登录账号，匿名访问可留空</string>
+    <string name="desc_password">对应上述用户名的登录密码</string>
+    <string name="desc_webdav_url">完整 WebDAV 服务地址，必须为 HTTPS</string>
+    <string name="custom_script_intro">自定义方案通过 JS 脚本上传，服务器地址、Token 等敏感信息写在脚本中</string>
+    <string name="load_custom_script_sample">加载示例脚本</string>
+    <string name="script_vars_title">脚本配置项</string>
+    <string name="script_vars_hint">脚本中的 %*名称*% 占位符会在此生成对应配置项，保存后运行期自动替换进脚本</string>
+    <string name="script_below_hint">下方还有脚本配置项与保存按钮，可下滑查看</string>
+    <string name="toast_sample_script_loaded">已加载示例脚本，可在此基础上修改</string>
+
     <string name="toast_device_id_required">请先在设备配置中填写设备ID</string>
     <string name="toast_backup_app_missing">未找到备份APP，请确认已安装小米备份</string>
     <string name="toast_market_app_missing">未找到小米应用商店</string>
@@ -169,6 +188,9 @@
     <string name="title_webview_login">登录 139 云盘</string>
     <string name="title_webview_login_guangya">登录光鸭云盘</string>
     <string name="webview_login_done">完成</string>
+    <string name="script_help_title">如何自定义脚本</string>
+    <string name="script_help_link">如何自定义脚本</string>
+    <string name="back">返回</string>
     <string name="webview_login_tip">请在网页中登录账号，完成后点击右上角「完成」</string>
     <string name="toast_webview_no_auth">未检测到登录信息，请完成登录后重试</string>
     <string name="toast_quark_login_incomplete">登录未完成或会话无效，请确认已进入夸克网盘界面后再点完成</string>

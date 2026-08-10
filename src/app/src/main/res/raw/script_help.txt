@@ -1,0 +1,85 @@
+自定义脚本使用说明
+====================================
+
+自定义配置通过 JS 脚本实现上传、下载、删除等操作。
+服务器地址、Token、Cookie、签名与刷新逻辑全部写在脚本里，
+界面不会再单独提供这些输入项。
+
+一、脚本基本结构
+------------------------------------
+脚本可实现的函数（按需提供）：
+
+  function testConnection(ctx) { return true; }
+  function listEntries(ctx) { return { method, url, headers }; }
+  function uploadFile(ctx) { return { method, url, headers }; }
+  function downloadFile(ctx) { return { method, url, headers }; }
+  function deletePath(ctx) { return { method, url, headers }; }
+
+testConnection 必须返回 true / false；
+其余函数返回请求对象（method/url/headers/body），
+由 App 代为发起 HTTP 请求；若脚本自行处理，
+可返回 { handled: true }。
+
+ctx 提供上下文：backupPath、remoteDir、remotePath、
+fileName、fileSize、contentHash 等字段。
+
+二、占位符配置项
+------------------------------------
+脚本中出现 %*名称*% 占位符（如 %*YOUR_TOKEN*%），
+界面会自动生成对应输入框，保存后运行期自动替换进脚本。
+改配置只需改输入框，不必修改脚本。
+
+三、脚本可用的宿主函数
+------------------------------------
+HTTP：
+  httpRequest(spec)            发起请求，返回 { code, body, headers }
+  httpDownload(spec)           下载到当前目标文件
+  httpRequestMultipart(spec)   多部分表单上传
+  httpHead(url, headers)       发起 HEAD 请求
+
+状态（按方案加密持久化）：
+  stateGet(key, default)       读取持久化状态
+  stateSet(key, value)         写入持久化状态
+
+加密与哈希：
+  base64Encode(s) / base64Decode(s)
+  sha256Hex(s) / md5Hex(s) / hashHex(s, algo)
+  hmacHex(key, data, algo) / hmacBase64(key, data, algo)
+  aesEncrypt(data, key) / aesDecrypt(data, key)
+
+文件（仅限本方案临时目录）：
+  tempFile(prefix, suffix)     创建临时文件
+  readTempFile(name) / writeTempFile(name, content)
+  deleteTempFile(name) / fileHashHex(file) / fileSize(file)
+
+工具：
+  uuid() / timestampSeconds() / timestampMillis() / randomHex(n)
+  console.log(...) / console.error(...)
+
+四、运行环境与安全边界
+------------------------------------
+- 不能访问任何 Java 类（ClassShutter 全拒绝）
+- eval / Function / runCommand 已禁用
+- 单次调用 30 秒超时（死循环会被看门狗终止）
+- 默认禁止访问内网/私有地址；确需访问内网可在
+  config.ini 配置 script_allow_private=true
+- 临时文件仅限本方案目录，路径穿越会被拒绝
+- 摘要算法限 MD5/SHA-1/SHA-256/SHA-384/SHA-512
+
+五、切片规则
+------------------------------------
+切片大小由 NAS 页全局设置的「切片大小」控制：
+0 表示不切片；大于 0 时大文件在 Cloud 层切片。
+脚本无需理解切片格式，uploadFile/downloadFile
+收到的都是普通远端路径。
+
+六、示例
+------------------------------------
+脚本为空时，运行时自动回退为 App 内置的默认模板
+（通用 HTTP 服务示例）。可在脚本框先粘贴你已有的
+脚本再修改，或参考本项目 plugins/ 目录下的示例：
+example.js（通用 HTTP）、yun139.js（云盘上传）、
+hmac-sign-example.js（HMAC 签名请求）。
+
+不要把真实 Cookie、Token 提交到公开仓库，
+发布脚本时请使用占位值。

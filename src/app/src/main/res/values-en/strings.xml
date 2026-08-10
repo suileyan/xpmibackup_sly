@@ -127,6 +127,9 @@
     <string name="title_webview_login_115">Log in to 115 Cloud Drive</string>
     <string name="title_webview_login_quark">Log in to Quark Drive</string>
     <string name="webview_login_done">Done</string>
+    <string name="script_help_title">How to write a custom script</string>
+    <string name="script_help_link">How to write a custom script</string>
+    <string name="back">Back</string>
     <string name="webview_login_tip">Log in on the page, then tap "Done" in the top-right corner.</string>
     <string name="toast_webview_no_auth">No login info detected. Please finish login and try again.</string>
 
@@ -161,6 +164,25 @@
     <string name="custom_script_hint">Write server URL and token in the script</string>
     <string name="test_and_save_config">Save and test configuration</string>
     <string name="testing_connection">Testing connection...</string>
+
+    <!-- NAS settings page: tabs and field descriptions -->
+    <string name="service_tab_nas">NAS Config</string>
+    <string name="service_tab_custom">Custom Config</string>
+    <string name="desc_profile_name">Name this profile to save multiple presets and switch between them</string>
+    <string name="desc_upload_threads">Concurrent upload threads; higher values use more bandwidth</string>
+    <string name="desc_chunk_size">Split uploads into chunks of this size; 0 disables chunking</string>
+    <string name="desc_smb_server">IP address or hostname of the NAS</string>
+    <string name="desc_smb_port">SMB port, default 445</string>
+    <string name="desc_share_folder">Shared folder name on the NAS, without path separators</string>
+    <string name="desc_username">Login account for the NAS; leave empty for anonymous access</string>
+    <string name="desc_password">Password for the username above</string>
+    <string name="desc_webdav_url">Full WebDAV URL; HTTPS is required</string>
+    <string name="custom_script_intro">Custom mode uploads via a JS script; sensitive info like server URL and token lives in the script</string>
+    <string name="load_custom_script_sample">Load sample script</string>
+    <string name="toast_sample_script_loaded">Sample script loaded. Modify it as needed.</string>
+    <string name="script_vars_title">Script variables</string>
+    <string name="script_vars_hint">Placeholders like %*NAME*% in the script generate fields below; values are substituted at runtime after saving</string>
+    <string name="script_below_hint">Script variables and the save button are below; scroll down to see them</string>
 
     <string name="toast_device_id_required">Please enter a device ID in Device settings first.</string>
     <string name="toast_backup_app_missing">Backup app not found. Please make sure Xiaomi Backup is installed.</string>

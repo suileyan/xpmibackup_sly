@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 动态生成的脚本占位符配置项输入框 id（rebuildScriptVars/collectScriptVars 复用） -->
+    <item name="et_script_var" type="id" />
+</resources>

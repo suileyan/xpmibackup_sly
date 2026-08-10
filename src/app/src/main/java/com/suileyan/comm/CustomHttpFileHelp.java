@@ -750,12 +750,43 @@ public class CustomHttpFileHelp {
             return getDefaultScript();
         }
         try {
-            return new String(Base64.getDecoder().decode(b64), StandardCharsets.UTF_8);
+            var decoded = new String(Base64.getDecoder().decode(b64), StandardCharsets.UTF_8);
+            // 占位符替换：%*NAME*% → 该方案 script_var_NAME 凭据值（getCompiledScript 缓存 key 用替换后内容，值变化自动失效）
+            return substitutePlaceholders(decoded);
         } catch (Exception e) {
             LogHelp.e(TAG, "decode custom script failed", e);
             return getDefaultScript();
         }
     }
+
+    /** 提取脚本中的占位符名列表（%*NAME*%，NAME 为字母数字下划线），保持出现顺序去重 */
+    public static java.util.List<String> extractScriptPlaceholders(String script) {
+        var names = new java.util.ArrayList<String>();
+        if (script == null || script.isEmpty()) return names;
+        var m = PLACEHOLDER_PATTERN.matcher(script);
+        while (m.find()) {
+            var name = m.group(1);
+            if (!names.contains(name)) names.add(name);
+        }
+        return names;
+    }
+
+    /** 替换脚本中的 %*NAME*% 占位符为当前方案 script_var_NAME 的值；未配置值替换为空串 */
+    private static String substitutePlaceholders(String script) {
+        if (script == null || script.isEmpty() || !script.contains("%*")) return script;
+        var m = PLACEHOLDER_PATTERN.matcher(script);
+        var sb = new StringBuffer();
+        while (m.find()) {
+            var name = m.group(1);
+            var value = com.suileyan.cloud.EncryptedCredStore.get(scriptAccountId(), "script_var_" + name);
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(value == null ? "" : value));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    private static final java.util.regex.Pattern PLACEHOLDER_PATTERN =
+            java.util.regex.Pattern.compile("%\\*([A-Za-z0-9_]+)\\*%");
 
     /** 计算文件SHA256 */
     private static String sha256(File file) throws Exception {
