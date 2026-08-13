@@ -398,16 +398,24 @@ public class Pan123Provider implements CloudProvider {
             if (entry == null) {
                 throw new CloudException(CloudException.Kind.REMOTE, "123文件不存在: " + remotePath);
             }
-            // download_info（签名）：换临时下载地址
-            var form = new LinkedHashMap<String, String>();
-            form.put("driveId", "0");
-            form.put("etag", entry.etag);
-            form.put("fileId", entry.fileId);
-            form.put("s3keyFlag", entry.s3keyFlag);
-            form.put("type", entry.isDir ? "1" : "0");
-            form.put("fileName", entry.name);
-            form.put("size", String.valueOf(entry.size));
-            var resp = postSigned("/a/api/file/download_info", false, null, form);
+            // download_info（b/api 新版 + JSON body；a/api 旧接口已废弃返回 code=-1 msg=fail，
+            // form 表单 b/api 不解析——对照 alist Link：SetBody(base.Json{...})）
+            var reqBody = new JSONObject();
+            reqBody.put("driveId", 0);
+            reqBody.put("etag", entry.etag);
+            reqBody.put("fileId", safeLong(entry.fileId, 0L));
+            reqBody.put("s3keyFlag", entry.s3keyFlag);
+            reqBody.put("type", entry.isDir ? 1 : 0);
+            reqBody.put("fileName", entry.name);
+            reqBody.put("size", entry.size);
+            var resp = postSigned("/b/api/file/download_info", true, reqBody, null);
+            // 诊断：download_info 业务错误（code=-1 msg=fail）定位——打印参数与完整响应
+            // （fileName 可能含中文；响应无 token 类敏感字段，截断 400 防刷屏）
+            LogHelp.i(TAG, "123 download_info req fileId=" + entry.fileId
+                    + " etagLen=" + (entry.etag == null ? 0 : entry.etag.length())
+                    + " s3keyFlag=" + entry.s3keyFlag
+                    + " size=" + entry.size
+                    + " resp=" + truncate(resp.body, 400));
             var json = requireOk(parse(resp, "download_info"), "download_info");
             var data = json.optJSONObject("data");
             var downloadUrl = data != null ? data.optString("DownloadUrl", "") : "";
@@ -921,6 +929,16 @@ public class Pan123Provider implements CloudProvider {
     private static String truncate(String text, int max) {
         if (text == null) return "";
         return text.length() <= max ? text : text.substring(0, max) + "...";
+    }
+
+    /** 字符串转 long（异常回退 0）；fileId 数字化供 download_info JSON body */
+    private static long safeLong(String s, long def) {
+        if (s == null || s.isEmpty()) return def;
+        try {
+            return Long.parseLong(s.trim());
+        } catch (NumberFormatException e) {
+            return def;
+        }
     }
 
     /** 123 云盘目录条目（保留 raw 供 trash 原样提交） */

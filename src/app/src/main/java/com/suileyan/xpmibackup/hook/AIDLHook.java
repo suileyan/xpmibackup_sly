@@ -458,8 +458,15 @@ public class AIDLHook {
         try {
             var remoteDir = normalizeRemotePath(remotePath);
             var entries = CloudFileHelp.listEntries(remoteDir);
+            // 诊断：完整文件名清单（定位"备份文件损坏"= 云端缺文件/分片结构异常，mock list 只打 first 不够）
+            var names = new StringBuilder();
+            for (var e : entries) {
+                if (names.length() > 0) names.append(',');
+                names.append(e.name);
+            }
             LogHelp.d(TAG, "mock list: aidl=" + remotePath + " -> remote=" + remoteDir
-                    + " entries=" + entries.size() + (entries.isEmpty() ? "" : " first=" + entries.get(0).name));
+                    + " entries=" + entries.size()
+                    + (names.length() == 0 ? "" : " names=" + names.substring(0, Math.min(names.length(), 400))));
             var aidlDir = normalizeAidlListPath(remotePath);
             entries = normalizeListEntries(entries, aidlDir);
             if (receiver != null) {
@@ -1252,6 +1259,8 @@ public class AIDLHook {
         var tempPath = LocalBackupFileHelp.TEMP_BACKUP_ROOT + deviceId;
         field.set(instance, tempPath);
         var tempDir = new File(tempPath);
+        // File.mkdirs() 对已存在目录返回 false（恢复页每次打开都会走到这里）：
+        // 目录已存在时直接跳过，仅"不存在且创建失败"才记错误（避免每次进恢复页刷一条 ERROR）
         if (!tempDir.exists() && !tempDir.mkdirs()) {
             logError("create restore temp dir failed", new IllegalStateException(tempPath));
         }
@@ -1271,11 +1280,27 @@ public class AIDLHook {
         }
     }
 
+    /** ensureRestoreDescriptors 节流间隔：小米 App 打开恢复页会反复触发 getDeviceList/设备状态，
+     * 每次都全量 listAndDownloadXml（19 个备份目录 × findEntry 全量 list）会引发 list 请求风暴
+     * 并挤占上传连接（实测 60-140 list/s，上传分片被拖 14-34s 甚至卡死）。10s 内只执行一次。 */
+    private static final long RESTORE_DESCRIPT_THROTTLE_MS = 10_000L;
+    private static volatile long sLastRestoreDescriptorsAt = 0L;
+    private static final Object RESTORE_DESCRIPT_LOCK = new Object();
+
     /**
      * 把云端descript.xml预下载到备份应用自己的临时目录，恢复列表仍走原生BackupDescriptor解析。
      * 字段名兼容混淆（"f"）；mTempPath 未设置时用模块默认临时目录兜底
      */
     private static void ensureRestoreDescriptors(Class<?> serviceClass, Object instance) throws Exception {
+        // 节流 + 串行：App 可能在 1 秒内多次触发（getDeviceList/state/connect 各一次），
+        // 全量下载耗时长，并发跑会互相放大 list 风暴
+        synchronized (RESTORE_DESCRIPT_LOCK) {
+            var now = System.currentTimeMillis();
+            if (now - sLastRestoreDescriptorsAt < RESTORE_DESCRIPT_THROTTLE_MS) {
+                return;
+            }
+            sLastRestoreDescriptorsAt = now;
+        }
         var field = findFieldByNames(serviceClass, "mTempPath", "f");
         String tempPath = null;
         if (field != null) {

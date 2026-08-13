@@ -233,6 +233,11 @@ public class TianyiProvider implements CloudProvider {
                     return;
                 } catch (Exception e) {
                     LogHelp.w(TAG, "189 SSON 登录失败", e);
+                    // 天翼 sessionKey 与登录 IP 绑定（动态 IP 漂移必现）：提示用户重新登录而非报通用错误
+                    if (e.getMessage() != null && e.getMessage().contains("check ip error")) {
+                        throw new CloudException(CloudException.Kind.AUTH_EXPIRED,
+                                "189 登录 IP 已变化（当前 IP 与登录时不一致），请重新登录");
+                    }
                     throw new CloudException(CloudException.Kind.AUTH_EXPIRED, "189 会话失效且 SSON 登录失败");
                 }
             }
@@ -408,7 +413,10 @@ public class TianyiProvider implements CloudProvider {
         if (resp.code < 200 || resp.code >= 300) {
             // 打响应体定位错误码（风控/InvalidSessionKey/参数问题；truncate 防 token 落盘）
             LogHelp.w(TAG, "189 getAccessTokenBySsKey HTTP " + resp.code + " body=" + truncate(resp.body, 300));
-            throw new CloudException(CloudException.Kind.AUTH_EXPIRED, "189 getAccessTokenBySsKey HTTP " + resp.code);
+            // IP 绑定校验失败（errorMsg 含 check ip error）→ 消息带标记，供上层定制文案
+            var reason = truncate(resp.body, 120);
+            throw new CloudException(CloudException.Kind.AUTH_EXPIRED,
+                    "189 getAccessTokenBySsKey HTTP " + resp.code + (reason.contains("check ip error") ? " [IP绑定变化]" : ""));
         }
         try {
             var json = new JSONObject(resp.body);
@@ -425,16 +433,47 @@ public class TianyiProvider implements CloudProvider {
         }
     }
 
-    /** 获取上传 RSA 公钥（sessionKey 鉴权，按 expire 缓存） */
+    /** 获取上传 RSA 公钥（sessionKey 鉴权，按 expire 缓存）。
+     * InvalidSessionKey（cookieUserSession=null）→ 清空 sessionKey 走 ensureSession 刷新链（accessToken 直登换新
+     * sessionKey / refreshToken / SSON 降级）后重试一次——对齐 SDK 的 InvalidSessionKey → 清 sessionKey retry；
+     * 刷新后仍失败才提示重新登录（否则持久化 accessToken 未过期时 ensureSession 第①步会一直信任过期 sessionKey） */
     private RsaKey ensureRsaKey() throws CloudException {
         if (rsaKey != null && rsaKey.expire > System.currentTimeMillis()) {
             return rsaKey;
         }
+        try {
+            return ensureRsaKeyInner(false);
+        } catch (CloudException e) {
+            // sessionKey 失效且尚未刷新过：强制刷新会话后重试一次
+            if (e.isAuthExpired()
+                    && e.getMessage() != null && e.getMessage().contains("InvalidSessionKey")) {
+                sessionKey = "";
+                rsaKey = null;
+                ensureSession();
+                return ensureRsaKeyInner(true);
+            }
+            throw e;
+        }
+    }
+
+    private RsaKey ensureRsaKeyInner(boolean refreshed) throws CloudException {
         var url = HttpUrl.parse(WEB_URL + "/api/security/generateRsaKey.action").newBuilder()
                 .addQueryParameter("sessionKey", sessionKey)
                 .build();
         var resp = execute(new Request.Builder().url(url).header("User-Agent", UA).build());
         if (resp.code < 200 || resp.code >= 300) {
+            // 400 + InvalidSessionKey = 189 会话失效（IP 绑定/cookieUserSession=null）：外层 ensureRsaKey 捕获后
+            // 清空 sessionKey 走刷新链重试；刷新后仍失败才提示重新登录
+            if (resp.body.contains("InvalidSessionKey")) {
+                LogHelp.w(TAG, "189 sessionKey 失效(InvalidSessionKey)"
+                        + (refreshed ? "，刷新后仍失败需重新登录" : "，准备刷新会话重试") + ": "
+                        + truncate(resp.body, 200));
+                throw new CloudException(CloudException.Kind.AUTH_EXPIRED,
+                        "189 InvalidSessionKey" + (refreshed ? "（刷新后仍失败）" : ""));
+            }
+            LogHelp.e(TAG, "189 generateRsaKey HTTP " + resp.code
+                    + " sessionKey=" + truncate(sessionKey, 12)
+                    + " body=" + truncate(resp.body, 250));
             throw new CloudException(CloudException.Kind.REMOTE, "189 generateRsaKey HTTP " + resp.code);
         }
         try {
@@ -473,15 +512,15 @@ public class TianyiProvider implements CloudProvider {
 
     @Override
     public boolean testConnection() throws CloudException {
-        // 根目录列表轻量验证（listFiles 成功即会话可用）
-        apiGet("/open/file/listFiles.action", listParams(ROOT_ID, 1, 1));
+        // 根目录列表轻量验证（listFiles 成功即会话可用）；根 ID 用 PERSONAL_ROOT_ID（-11）与 resolvePath 一致
+        apiGet("/open/file/listFiles.action", listParams(PERSONAL_ROOT_ID, 1, 1));
         return true;
     }
 
     @Override
     public List<String> listDirs() throws CloudException {
         var out = new ArrayList<String>();
-        for (var e : listParent(ROOT_ID)) {
+        for (var e : listParent(PERSONAL_ROOT_ID)) {
             if (e.directory) out.add(e.name);
         }
         return out;
@@ -973,7 +1012,14 @@ public class TianyiProvider implements CloudProvider {
                     .header("User-Agent", UA)
                     .header("Referer", WEB_URL + "/web/main/")
                     .header("Accept", "application/json;charset=UTF-8");
-            return execute(builder.build());
+            var resp = execute(builder.build());
+            // 诊断：上传域 511 S3ClientException 定位——打印接口路径/关键参数/响应 code 与 body
+            // （sessionKey 不回显，参数无敏感 token；响应截断 300 防刷屏）
+            LogHelp.i(TAG, "189 uploadGet path=" + path
+                    + " params=" + truncate(params.toString(), 200)
+                    + " code=" + resp.code
+                    + " body=" + truncate(resp.body, 300));
+            return resp;
         });
     }
 
@@ -1162,7 +1208,7 @@ public class TianyiProvider implements CloudProvider {
 
     private List<Item> collectEntries(String parentId) throws CloudException {
         var out = new ArrayList<Item>();
-        var pid = parentId == null || parentId.isEmpty() ? ROOT_ID : parentId;
+        var pid = parentId == null || parentId.isEmpty() ? PERSONAL_ROOT_ID : parentId;
         var page = 1;
         var total = Integer.MAX_VALUE;
         while (out.size() < total && page <= MAX_PAGES) {
@@ -1227,18 +1273,24 @@ public class TianyiProvider implements CloudProvider {
         return id;
     }
 
-    /** 解析路径为目录 id；createMissing=true 自动建目录；缺失返回 null */
+    /** 解析路径为目录 id；createMissing=true 自动建目录；缺失返回 null。
+     * 起点必须用 PERSONAL_ROOT_ID(-11) 而非 ROOT_ID("")——createFolder 对空 parentId 实际落盘到 -11，
+     * 若这里用 "" 查询会永远看不到 -11 下已创建的目录（实测：上传成功但恢复列表 entries=0） */
     private String resolvePath(String path, boolean createMissing) throws CloudException {
         var v = trimSlashes(path);
-        if (v.isEmpty()) return ROOT_ID;
+        if (v.isEmpty()) return PERSONAL_ROOT_ID;
         var parts = v.split("/");
-        var parentId = ROOT_ID;
+        var parentId = PERSONAL_ROOT_ID;
         for (var part : parts) {
             var name = cleanName(part);
             if (name.isEmpty()) continue;
             var child = findChild(parentId, name);
             if (child == null) {
-                if (!createMissing) return null;
+                if (!createMissing) {
+                    // 诊断：目录不存在（恢复列表 entries=0 的常见原因——备份从未成功创建目录）
+                    LogHelp.w(TAG, "189 resolvePath 目录不存在: " + v + " (segment: " + name + ")");
+                    return null;
+                }
                 parentId = createFolder(parentId, name);
                 continue;
             }

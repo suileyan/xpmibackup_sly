@@ -134,13 +134,60 @@ public class CloudFileHelp {
     }
 
     /**
+     * 枚举备份目录（backup_path 下的直接子目录；backup_path 为空时用云端根目录子目录）。
+     * 只保留备份目录格式（\d{8}_\d{6}），跳过云盘根下其他用户文件夹——
+     * 备份实际存放在 backup_path 之下，listDirs() 返回的是云端根目录子目录，两者不能混用
+     * （否则 backup_path 嵌套时枚举 0 个备份目录，descript.xml 零预下载，恢复列表为空）。
+     */
+    private static List<String> listBackupDirs() {
+        var backupPath = ConfigHelp.getString("backup_path", "");
+        List<String> dirs;
+        if (backupPath == null || backupPath.isEmpty()) {
+            dirs = listDirs();
+        } else {
+            dirs = new java.util.ArrayList<String>();
+            for (var e : listEntries(backupPath)) {
+                if (e.directory) dirs.add(e.name);
+            }
+        }
+        var result = new java.util.ArrayList<String>(dirs.size());
+        for (var dirName : dirs) {
+            if (dirName != null && dirName.matches("\\d{8}_\\d{6}")) {
+                result.add(dirName);
+            }
+        }
+        return result;
+    }
+
+    /** 全量 descript 遍历节流间隔：App/UI 可能每秒多次触发 readBackupXmls/listAndDownloadXml
+     * （恢复页 getDeviceList/设备状态回调 + 账号列表刷新），每次都全量遍历 19 个备份目录并 findEntry，
+     * 并发叠加会引发 list 请求风暴（实测 60-140 list/s）挤占上传连接。10s 内只执行一次。 */
+    private static final long LIST_XML_THROTTLE_MS = 10_000L;
+    private static volatile long sLastListXmlAt = 0L;
+
+    /** 节流闸门：10s 内已跑过返回 false（同一进程内生效；跨进程由各调用方独立节流） */
+    private static boolean allowListXmlRun() {
+        var now = System.currentTimeMillis();
+        synchronized (CloudFileHelp.class) {
+            if (now - sLastListXmlAt < LIST_XML_THROTTLE_MS) {
+                return false;
+            }
+            sLastListXmlAt = now;
+            return true;
+        }
+    }
+
+    /**
      * 读取所有备份目录里的descript.xml内容
      */
     public static List<String> readBackupXmls() {
+        if (!allowListXmlRun()) {
+            return List.of();
+        }
         try {
             var xmlList = new java.util.ArrayList<String>();
             var backupPath = ConfigHelp.getString("backup_path", "");
-            for (var dirName : listDirs()) {
+            for (var dirName : listBackupDirs()) {
                 var local = File.createTempFile("descript", ".xml");
                 try {
                     var result = downloadFile(remotePath(backupDirPath(backupPath, dirName), "descript.xml"), local.getAbsolutePath());
@@ -162,35 +209,55 @@ public class CloudFileHelp {
     }
 
     /**
-     * 列出备份目录，并把每个descript.xml下载到本地临时目录
+     * 列出备份目录，并把每个descript.xml下载到本地临时目录。
+     * 只处理备份目录（\d{8}_\d{6}），跳过云盘根下其他用户文件夹——否则每连接一次就遍历全部文件夹
+     * （139 等网盘根目录含照片/文档等大量文件夹，逐个 findEntry 触发 list 请求风暴、卡住连接）
+     * 并行下载（固定 3 线程）：备份目录多时串行遍历会累积成秒级延迟（实测 25 目录 4-5 秒），
+     * 并行后 1-2 秒；139 同 host 并发上限 5，3 线程留余量避免与上传争抢
      */
     public static String listAndDownloadXml(String localTempPath) {
+        if (!allowListXmlRun()) {
+            return "";
+        }
+        var backupPath = ConfigHelp.getString("backup_path", "");
+        var dirs = listBackupDirs();
+        var result = new java.util.concurrent.ConcurrentLinkedQueue<String>();
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(3, r -> {
+            var t = new Thread(r, "list-xml-dl");
+            t.setDaemon(true);
+            return t;
+        });
         try {
-            var backupPath = ConfigHelp.getString("backup_path", "");
-            var result = new StringBuilder();
-            for (var dirName : listDirs()) {
-                try {
-                    var localDir = new File(localTempPath, dirName);
-                    localDir.mkdirs();
-                    var localFile = new File(localDir, "descript.xml");
-                    var downloaded = downloadFile(remotePath(backupDirPath(backupPath, dirName), "descript.xml"), localFile.getAbsolutePath());
-                    if (downloaded != null && !downloaded.startsWith("ERROR:")) {
-                        var rstFile = new File(localDir, "restoring");
-                        if (!rstFile.exists()) rstFile.createNewFile();
-                        if (result.length() > 0) result.append(",");
-                        result.append(dirName);
-                    } else {
-                        logError("listAndDownloadXml descript failed [dir=" + dirName + ", result=" + downloaded + "]", new IllegalStateException("download descript.xml failed"));
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<?>>(dirs.size());
+            for (var dirName : dirs) {
+                futures.add(executor.submit(() -> {
+                    try {
+                        var localDir = new File(localTempPath, dirName);
+                        localDir.mkdirs();
+                        var localFile = new File(localDir, "descript.xml");
+                        var downloaded = downloadFile(remotePath(backupDirPath(backupPath, dirName), "descript.xml"), localFile.getAbsolutePath());
+                        if (downloaded != null && !downloaded.startsWith("ERROR:")) {
+                            var rstFile = new File(localDir, "restoring");
+                            if (!rstFile.exists()) rstFile.createNewFile();
+                            result.add(dirName);
+                        } else {
+                            logError("listAndDownloadXml descript failed [dir=" + dirName + ", result=" + downloaded + "]", new IllegalStateException("download descript.xml failed"));
+                        }
+                    } catch (Exception e) {
+                        logError("listAndDownloadXml descript failed [dir=" + dirName + "]", e);
                     }
-                } catch (Exception e) {
-                    logError("listAndDownloadXml descript failed [dir=" + dirName + "]", e);
-                }
+                }));
             }
-            return result.toString();
+            for (var f : futures) {
+                f.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            }
         } catch (Exception e) {
             logError("listAndDownloadXml failed [type=" + currentType() + "]", e);
             return "ERROR: " + e.getMessage();
+        } finally {
+            executor.shutdownNow();
         }
+        return String.join(",", result);
     }
 
     /**
@@ -213,7 +280,9 @@ public class CloudFileHelp {
             if (max <= 0) {
                 return;
             }
-            var dirs = new java.util.ArrayList<>(listDirs());
+            // 只处理备份目录（\d{8}_\d{6}）：listDirs() 返回云端根目录全部文件夹，
+            // 若直接排序删除会误删根下用户自己的文件夹（HIGH：139 根含照片/文档等）
+            var dirs = new java.util.ArrayList<>(listBackupDirs());
             if (dirs.size() <= max) {
                 return;
             }
@@ -248,6 +317,14 @@ public class CloudFileHelp {
                     provider.deleteDir(dir);
                 } catch (Exception e) {
                     logError("deleteRemoteDir failed [dir=" + dir + "]", e);
+                    // 百度 errno=132 安全验证是账号级风控（实测 12:53 日志连续 132）：
+                    // 后续目录删除必然同样被拦，停止循环避免反复触发风控
+                    var msg = String.valueOf(e.getMessage());
+                    if (msg.contains("安全验证")) {
+                        com.suileyan.comm.LogHelp.w("CloudFileHelp",
+                                "删除触发账号级安全验证，停止清理旧备份（可在网页端手动处理）");
+                        break;
+                    }
                 }
             }
         } catch (Exception e) {
@@ -292,6 +369,11 @@ public class CloudFileHelp {
         var buffer = new byte[BUFFER_SIZE];
         var totalWritten = 0L;
 
+        // 分片并行上传（3 线程）：切分串行（顺序读源流），上传并发提交。
+        // 沃盘等云盘对单请求限速（实测沃盘上传域当前 ~70KB/s 总吞吐，5 连接共享；并发提到 8 试每连接限速的剩余空间）
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(8);
+        var futures = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+        var uploaded = new java.util.concurrent.atomic.AtomicLong(0L);
         try (var fis = new FileInputStream(localFile)) {
             for (var i = 0L; i < totalParts; i++) {
                 var partName = localFile.getName() + ".part" + partName(i);
@@ -309,19 +391,54 @@ public class CloudFileHelp {
                             totalWritten += read;
                         }
                     }
-                    var uploadResult = uploadSingle(partFile.getAbsolutePath(), remoteDir);
-                    if (uploadResult != null && uploadResult.startsWith("ERROR:")) {
-                        throw new IllegalStateException(uploadResult);
-                    }
-                    if (cb != null) cb.onProgress(taskId, totalWritten, fileSize);
-                } finally {
+                } catch (Exception e) {
                     deleteTempFile(partFile);
+                    throw e;
                 }
+                final var partSize = partFile.length();
+                futures.add(executor.submit(() -> {
+                    try {
+                        var uploadResult = uploadSingle(partFile.getAbsolutePath(), remoteDir);
+                        if (uploadResult != null && uploadResult.startsWith("ERROR:")) {
+                            throw new IllegalStateException(uploadResult);
+                        }
+                        if (cb != null) cb.onProgress(taskId, uploaded.addAndGet(partSize), fileSize);
+                    } catch (Exception ex) {
+                        // submit(Runnable) 不能抛检查异常，包装为 CompletionException，外层 f.get() 解包
+                        throw new java.util.concurrent.CompletionException(ex);
+                    } finally {
+                        deleteTempFile(partFile);
+                    }
+                }));
             }
         } catch (Exception e) {
-            // 上传失败：清理已上传的远端分片与可能残留的旧 manifest
+            // 切分/提交异常：取消未完成分片并清理已上传的远端分片
+            for (var f : futures) {
+                f.cancel(true);
+            }
             cleanupRemoteChunks(remoteDir, localFile.getName(), totalParts);
             throw e;
+        } finally {
+            executor.shutdown();
+        }
+        try {
+            // 等待全部分片上传完成（任一失败 → 清理已上传远端分片后抛给上层）
+            for (var f : futures) {
+                f.get();
+            }
+        } catch (Exception e) {
+            cleanupRemoteChunks(remoteDir, localFile.getName(), totalParts);
+            if (e instanceof java.util.concurrent.ExecutionException ee && ee.getCause() != null) {
+                var cause = ee.getCause();
+                while (cause instanceof java.util.concurrent.CompletionException ce && ce.getCause() != null) {
+                    cause = ce.getCause();
+                }
+                if (cause instanceof Exception ex) {
+                    throw ex;
+                }
+                throw new IllegalStateException(cause);
+            }
+            throw new IllegalStateException(e);
         }
 
         var manifest = new JSONObject();
@@ -413,20 +530,49 @@ public class CloudFileHelp {
                     return null;
                 }
             }
-            try (var out = new FileOutputStream(localFile)) {
+            // 分片并行下载（3 线程）：云盘 dlink 限速若为每连接级，并行可线性加速（百度实测单连接 ~30KB/s；
+            // 账号级限速则总吞吐不变，但并行至少不劣化）。按序合并保证文件完整性
+            var partFiles = new java.util.ArrayList<File>((int) parts);
+            var executor = java.util.concurrent.Executors.newFixedThreadPool(3);
+            try {
+                var futures = new java.util.ArrayList<java.util.concurrent.Future<?>>((int) parts);
                 for (var i = 0L; i < parts; i++) {
                     var partFile = File.createTempFile("mibak_part", ".tmp", parent);
-                    try {
-                        var partResult = downloadSingle(remotePath + ".part" + partName(i), partFile.getAbsolutePath());
-                        if (partResult == null || partResult.startsWith("ERROR:")) {
-                            throw new IllegalStateException(partResult);
+                    partFiles.add(partFile);
+                    final var idx = i;
+                    futures.add(executor.submit(() -> {
+                        try {
+                            var partResult = downloadSingle(remotePath + ".part" + partName(idx), partFile.getAbsolutePath());
+                            if (partResult == null || partResult.startsWith("ERROR:")) {
+                                throw new IllegalStateException(partResult);
+                            }
+                        } catch (Exception e) {
+                            throw new java.util.concurrent.CompletionException(e);
                         }
-                        try (var in = new FileInputStream(partFile)) {
+                    }));
+                }
+                for (var f : futures) {
+                    try {
+                        f.get();
+                    } catch (java.util.concurrent.ExecutionException e) {
+                        var cause = e.getCause();
+                        if (cause instanceof Exception ex) {
+                            throw ex;
+                        }
+                        throw new IllegalStateException(cause);
+                    }
+                }
+                try (var out = new FileOutputStream(localFile)) {
+                    for (var pf : partFiles) {
+                        try (var in = new FileInputStream(pf)) {
                             streamCopy(in, out);
                         }
-                    } finally {
-                        deleteTempFile(partFile);
                     }
+                }
+            } finally {
+                executor.shutdownNow();
+                for (var pf : partFiles) {
+                    deleteTempFile(pf);
                 }
             }
             // 最终大小校验：与声明 size 不一致（超出或截断）都视为数据异常，删除半成品（HIGH-09 / NEW-L-05）

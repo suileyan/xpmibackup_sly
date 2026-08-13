@@ -112,6 +112,8 @@ public class GuangyaProvider implements CloudProvider {
     @Override
     public List<RemoteEntry> listEntries(String remoteDir) throws CloudException {
         var parentId = resolvePath(remoteDir, false);
+        // 诊断：枚举目录 ID（与上传 token parentId 对比——part 文件曾出现"转正成功但目录看不到"）
+        LogHelp.i(TAG, "光鸭 listEntries dir=" + remoteDir + " parentId=" + truncate(parentId, 24));
         if (parentId == null) return new ArrayList<>();
         return listParent(parentId);
     }
@@ -139,6 +141,16 @@ public class GuangyaProvider implements CloudProvider {
             var parentId = resolvePath(remoteDir, true);
             if (cb != null) cb.onStart(taskId);
             var size = localFile.length();
+            // 0 字节文件（备份完成标记 end）：光鸭服务端不支持空文件上传，直接 mock 成功（对齐百度/沃盘）
+            if (size == 0) {
+                LogHelp.i(TAG, "光鸭跳过 0 字节文件（服务端不支持空文件）: " + localFile.getName());
+                if (cb != null) cb.onFinish(taskId, 0, "success");
+                return;
+            }
+            // 诊断：上传链路（"备份文件损坏"排查——记录上传文件名/大小/OSS objectKey，与下载大小/descript 声明对比）
+            LogHelp.i(TAG, "光鸭 upload start name=" + localFile.getName()
+                    + " size=" + size + " remoteDir=" + remoteDir
+                    + " parentId=" + truncate(parentId, 24));
 
             // 1. 获取上传凭证（可能返回空 creds = 服务端直接处理/秒传）
             var tokenBody = new JSONObject();
@@ -174,9 +186,28 @@ public class GuangyaProvider implements CloudProvider {
 
             // 2. OSS 分片直传（单分片，CloudFileHelp 已切片）
             ossUpload(bucket, objectKey, fullEndPoint, akId, akSecret, secToken, localFile, cb, taskId);
+            LogHelp.i(TAG, "光鸭 OSS 上传完成 name=" + localFile.getName()
+                    + " size=" + size + " object=" + objectKey);
 
-            // 3. 确认任务
-            callApi("/nd.bizuserres.s/v1/file/get_info_by_task_id", new JSONObject().put("taskId", taskId2));
+            // 3. 确认任务（对齐参考 file_upload：上传后轮询等待服务端把 upload_tmp 临时对象转正为正式文件。
+            //    光鸭大文件转正是异步的（msg="文件上传中"），不等待会导致文件留在临时区、目录里找不到 → 恢复时报"备份文件损坏"）
+            for (var i = 0; i < 3; i++) {
+                var info = callApi("/nd.bizuserres.s/v1/file/get_info_by_task_id", new JSONObject().put("taskId", taskId2));
+                var msg = info.optString("msg", "");
+                // 诊断：打印任务确认响应（区分"文件上传中"与转正成功；part 文件曾出现确认成功但目录缺失）
+                LogHelp.i(TAG, "光鸭 确认任务 name=" + localFile.getName()
+                        + " taskId=" + truncate(taskId2, 20) + " msg=" + truncate(msg, 40)
+                        + " resp=" + truncate(info.toString(), 200));
+                if (!"文件上传中".equals(msg) && !"处理中".equals(msg)) {
+                    break;
+                }
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
             if (cb != null) cb.onFinish(taskId, 0, "success");
         } catch (CloudException e) {
             if (cb != null) cb.onFinish(taskId, -1, e.getMessage());
@@ -206,8 +237,12 @@ public class GuangyaProvider implements CloudProvider {
             }
             var urlJson = callApi("/nd.bizuserres.s/v1/get_res_download_url", new JSONObject().put("fileId", fileId));
             var data = urlJson.optJSONObject("data");
-            var dl = data != null ? data.optString("downloadUrl", data.optString("url", "")) : "";
+            // 实测响应字段为 signedURL（签名下载地址），downloadUrl/url 为历史兼容
+            var dl = data != null ? data.optString("signedURL", data.optString("downloadUrl", data.optString("url", ""))) : "";
             if (dl.isEmpty()) {
+                // 打响应结构定位字段（光鸭可能改接口或对部分文件返回 sign 流程）
+                LogHelp.w(TAG, "光鸭 get_res_download_url 缺少下载地址: " + remotePath
+                        + " resp=" + truncate(urlJson.toString(), 300));
                 throw new CloudException(CloudException.Kind.REMOTE, "光鸭缺少下载地址: " + remotePath);
             }
             var request = new Request.Builder().url(dl).build();
@@ -228,6 +263,11 @@ public class GuangyaProvider implements CloudProvider {
                     }
                 }
             }
+            // 诊断：下载完整性——本地大小 vs 云端 size（"备份文件损坏"= 下载截断或上传本身损坏，先区分）
+            var localLen = new File(localPath).length();
+            LogHelp.i(TAG, "光鸭 download done name=" + name
+                    + " local=" + localLen + " remote=" + entry.size
+                    + (localLen == entry.size ? "" : " **SIZE-MISMATCH**"));
             return "OK: " + remotePath + " -> " + localPath;
         } catch (CloudException e) {
             throw e;
@@ -424,11 +464,58 @@ public class GuangyaProvider implements CloudProvider {
         for (var guard = 0; guard < 200; guard++) {
             var json = callApi("/userres/v1/file/get_file_list", listBody(pid, page, 50));
             var data = json.optJSONObject("data");
+            // 诊断：打印 data 全部键 + list/fileList 每项 fileName——定位"响应 total=8 含 part 但解析后只有 5 项"的丢失点
+            var keys = new StringBuilder();
+            if (data != null) {
+                var it = data.keys();
+                while (it.hasNext()) keys.append(it.next()).append(',');
+            }
+            var arrDebug = (JSONArray) null;
+            if (data != null) {
+                if (data.has("fileList")) arrDebug = data.optJSONArray("fileList");
+                else if (data.has("list")) arrDebug = data.optJSONArray("list");
+            }
+            var names = new StringBuilder();
+            if (arrDebug != null) {
+                for (var i = 0; i < arrDebug.length(); i++) {
+                    var o = arrDebug.optJSONObject(i);
+                    if (o != null) {
+                        if (names.length() > 0) names.append(',');
+                        names.append(o.optString("fileName", "?"));
+                    }
+                }
+            }
+            LogHelp.i(TAG, "光鸭 get_file_list parent=" + truncate(pid, 24) + " page=" + page
+                    + " dataKeys=" + keys + " arrLen=" + (arrDebug == null ? -1 : arrDebug.length())
+                    + " names=" + truncate(names.toString(), 400));
             var arr = (JSONArray) null;
             if (data != null) {
-                if (data.has("fileList")) arr = data.optJSONArray("fileList");
-                else if (data.has("list")) arr = data.optJSONArray("list");
-                else if (data.length() > 0) {
+                // 关键：光鸭响应 data 可能同时有 fileList（常规文件）与 list（分片/特殊文件）——必须取"两者并集"
+                var arr1 = data.optJSONArray("fileList");
+                var arr2 = data.optJSONArray("list");
+                if (arr1 != null && arr2 != null) {
+                    arr = arr1;
+                    // 合并 list 中不在 fileList 的项（part 分片在 list 中）
+                    for (var i = 0; i < arr2.length(); i++) {
+                        var obj = arr2.optJSONObject(i);
+                        if (obj == null) continue;
+                        var nm = obj.optString("fileName", "");
+                        if (nm.isEmpty()) continue;
+                        var dup = false;
+                        for (var j = 0; j < arr1.length(); j++) {
+                            var o1 = arr1.optJSONObject(j);
+                            if (o1 != null && nm.equals(o1.optString("fileName", ""))) {
+                                dup = true;
+                                break;
+                            }
+                        }
+                        if (!dup) arr.put(obj);
+                    }
+                } else if (arr1 != null) {
+                    arr = arr1;
+                } else if (arr2 != null) {
+                    arr = arr2;
+                } else if (data.length() > 0) {
                     // data 本身可能是数组（防御）
                     try {
                         arr = new JSONArray(data.toString());
@@ -480,6 +567,9 @@ public class GuangyaProvider implements CloudProvider {
                 var child = findChild(parentId, name);
                 if (child != null) id = child.fileId;
             }
+            // 诊断：create_dir 响应与解析出的 ID（目录 ID 链对比——part 转正目标 vs list 枚举目录）
+            LogHelp.i(TAG, "光鸭 create_dir name=" + name + " parent=" + truncate(parentId, 24)
+                    + " -> id=" + truncate(id, 24) + " resp=" + truncate(json.toString(), 200));
             if (id.isEmpty()) {
                 throw new CloudException(CloudException.Kind.REMOTE, "光鸭建目录缺少 id: " + truncate(json.toString(), 200));
             }
@@ -818,7 +908,10 @@ public class GuangyaProvider implements CloudProvider {
         static Item fromJson(JSONObject obj) {
             var fileId = entryId(obj);
             var name = obj.optString("fileName", obj.optString("name", ""));
-            var isDir = obj.optInt("dirType", 0) == 1
+            // 光鸭条目：目录 dirType=1,resType=2；文件 dirType=1,resType=1——dirType 文件/目录相同，
+            // **必须用 resType==2 判目录**（旧逻辑 dirType==1 把所有文件误判为目录 → manifest 不转换、
+            // 恢复列表不显示彩信.bak → App 无法恢复彩信 → 报"备份文件损坏"）
+            var isDir = obj.optInt("resType", 0) == 2
                     || obj.optBoolean("isDir", false)
                     || "folder".equals(obj.optString("type"));
             var modified = 0L;

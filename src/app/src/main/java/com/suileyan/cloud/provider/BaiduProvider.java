@@ -68,6 +68,9 @@ public class BaiduProvider implements CloudProvider {
     private static final String UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
             + "Chrome/131.0.0.0 Safari/537.36";
+    /** 百度网盘客户端 UA：dlink 下载用客户端 UA 可避开网页端限速（网页 UA 实测大文件被限到 ~30KB/s） */
+    private static final String NETDISK_UA =
+            "netdisk;5.2.7;PC;PC-Windows;10.0.17763;WindowsBaiduYunGuanJia";
 
     /** 分片 4MB（xpan precreate 约定） */
     private static final int BLOCK_SIZE = 4 * 1024 * 1024;
@@ -191,13 +194,15 @@ public class BaiduProvider implements CloudProvider {
         return findChild(dir, targetName);
     }
 
-    /** 建目录；errno 31061（已存在）幂等忽略，返回目标绝对路径 */
+    /** 建目录；errno 31061（已存在）幂等忽略，返回目标绝对路径
+     * 参数对齐百度网页版：a=commit + path（完整目标路径）+ type=1（目录），
+     * 不传 isdir（实测多传 isdir=1 触发 errno=2 参数错误——百度 /api/create 创建目录不认该字段） */
     private String createFolder(String dirPath, String name) throws CloudException {
         var target = joinPath(dirPath, name);
         var form = new LinkedHashMap<String, String>();
+        form.put("a", "commit");
         form.put("type", "1");
         form.put("path", target);
-        form.put("isdir", "1");
         var json = apiPost("create", form);
         // 其余非 0 errno 已在 parseApiResponse 抛出
         return target;
@@ -256,6 +261,14 @@ public class BaiduProvider implements CloudProvider {
             if (cb != null) cb.onStart(taskId);
             var size = localFile.length();
             var targetPath = joinPath(remoteDirPath, localFile.getName());
+            // 百度不允许 0 字节文件（实测 precreate size=0&block_list=[] 返回 errno=2，
+            // AList/RaiDrive 文档亦记录"百度网盘不允许创建空文件"）：
+            // end 等 0 字节标记文件直接 mock 成功——云端无需真实存在，恢复列表只依赖 descript.xml
+            if (size == 0) {
+                LogHelp.i(TAG, "百度跳过 0 字节文件（服务端不支持空文件）: " + targetPath);
+                if (cb != null) cb.onFinish(taskId, 0, "success");
+                return;
+            }
             var hashes = computeHashes(localFile, size);
 
             // 注：rapidupload 旧接口已被百度限制（errno=2），秒传检测统一走 precreate
@@ -266,6 +279,11 @@ public class BaiduProvider implements CloudProvider {
             if (errno == 31081 || errno == 31363) {
                 LogHelp.w(TAG, "百度合并失败 errno=" + errno + "，整文件重传一次");
                 errno = uploadChunks(targetPath, size, hashes, localFile, cb, taskId);
+            }
+            if (errno == 10) {
+                // 合并返回 errno=10（文件已存在）：秒传命中或此前已传完，视为上传成功
+                LogHelp.i(TAG, "百度合并 errno=10（文件已存在），视为成功: " + targetPath);
+                errno = 0;
             }
             if (errno != 0) {
                 throw new CloudException(CloudException.Kind.REMOTE, "百度合并失败 errno=" + errno);
@@ -295,7 +313,10 @@ public class BaiduProvider implements CloudProvider {
         form.put("isdir", "0");
         form.put("autoinit", "1");
         form.put("block_list", new JSONArray(hashes.chunkMd5s).toString());
-        form.put("content-md5", hashes.contentMd5);
+        // 不传 content-md5：该参数属 rapidupload 秒传接口，/api/precreate 不认，
+        // 多传可能触发 errno=2 参数错误（与 createFolder 多传 isdir 同类教训）
+        LogHelp.d(TAG, "百度 precreate path=" + targetPath + " size=" + size
+                + " blocks=" + hashes.chunkMd5s.size());
         var json = apiPost("precreate", form);
         var uploadId = json.optString("uploadid", "");
         if (uploadId.isEmpty()) {
@@ -510,20 +531,26 @@ public class BaiduProvider implements CloudProvider {
             params.put("dlink", "1");
             var json = apiGet("filemetas", params);
             String dlink = "";
-            var list = json.optJSONArray("list");
-            if (list != null && list.length() > 0) {
-                var first = list.optJSONObject(0);
+            // 响应字段：web 端点 pan.baidu.com/api/filemetas 是 info（实测 errno=0 + info 数组）；
+            // 官方 openapi 端点 /rest/2.0/xpan/multimedia 才是 list——两种都兼容
+            var arr = json.optJSONArray("info");
+            if (arr == null || arr.length() == 0) arr = json.optJSONArray("list");
+            if (arr != null && arr.length() > 0) {
+                var first = arr.optJSONObject(0);
                 if (first != null) dlink = first.optString("dlink", "");
             }
             if (dlink.isEmpty()) {
+                // 响应结构变化时打印完整响应定位（dlink 为签名 URL 属敏感值，截断且只打长度）
+                LogHelp.w(TAG, "百度 filemetas 无 dlink: fsid=" + entry.fsId
+                        + " resp=" + truncate(json.toString(), 300));
                 throw new CloudException(CloudException.Kind.REMOTE, "百度缺少下载地址: " + remotePath);
             }
             var builder = new Request.Builder().url(dlink)
                     .header("Cookie", cookie())
-                    .header("User-Agent", UA)
-                    .header("Referer", REFERER)
+                    // 下载用网盘客户端 UA（网页 UA 被限速）；Referer 留空——客户端 UA 下带 Referer 反而异常
+                    .header("User-Agent", NETDISK_UA)
                     .header("Accept", "*/*");
-            try (var resp = client().newCall(builder.build()).execute()) {
+            try (var resp = downloadClient().newCall(builder.build()).execute()) {
                 var code = resp.code();
                 if (code < 200 || code >= 300) {
                     throw new CloudException(CloudException.Kind.REMOTE, "百度下载 HTTP " + code);
@@ -532,6 +559,7 @@ public class BaiduProvider implements CloudProvider {
                 if (body == null) {
                     throw new CloudException(CloudException.Kind.REMOTE, "百度下载空响应");
                 }
+                var startMs = System.currentTimeMillis();
                 try (var out = new FileOutputStream(localPath); var in = body.byteStream()) {
                     var buffer = new byte[BUFFER_SIZE];
                     var read = 0;
@@ -545,6 +573,12 @@ public class BaiduProvider implements CloudProvider {
                         throw new CloudException(CloudException.Kind.REMOTE,
                                 "百度下载不完整: " + written + "/" + total);
                     }
+                    var cost = System.currentTimeMillis() - startMs;
+                    var kbPerSec = cost > 0 ? written * 1000.0 / cost / 1024 : 0.0;
+                    // 诊断：下载耗时/速度（大文件慢排查——网页 UA vs 客户端 UA 限速对比）
+                    LogHelp.i(TAG, "百度 download done name=" + pathName(remote)
+                            + " size=" + written + " cost=" + cost + "ms speed=" + (int) kbPerSec + "KB/s"
+                            + " ua=" + (NETDISK_UA.startsWith("netdisk") ? "client" : "web"));
                 }
             }
             return "OK: " + remotePath + " -> " + localPath;
@@ -567,7 +601,7 @@ public class BaiduProvider implements CloudProvider {
         deletePath(remotePath);
     }
 
-    /** 批量管理删除：filemanager opera=delete，filelist=[{"path":...,"fs_id":...}]（fs_id 必需，仅 path 会 errno=2） */
+    /** 批量管理删除：filemanager?opera=delete，filelist=[{"path":...,"fs_id":...}]（fs_id 必需，仅 path 会 errno=2） */
     private void deletePath(String remotePath) throws CloudException {
         var remote = trimSlashes(remotePath);
         if (remote.isEmpty()) return;
@@ -580,10 +614,11 @@ public class BaiduProvider implements CloudProvider {
             item.put("fs_id", entry.fsId);
             filelist.put(item);
             var form = new LinkedHashMap<String, String>();
-            form.put("opera", "delete");
             form.put("async", "1");
             form.put("filelist", filelist.toString());
-            apiPost("filemanager", form);
+            // opera 必须在 URL query（web 前端为 POST /api/filemanager?opera=delete），
+            // 放 form body 会被服务端判参数错误 errno=2（实测 12:48 日志 deletePath errno=2 即此因）
+            apiPost("filemanager?opera=delete", form);
         } catch (CloudException e) {
             throw e;
         } catch (Exception e) {
@@ -612,6 +647,22 @@ public class BaiduProvider implements CloudProvider {
                     .writeTimeout(300, TimeUnit.SECONDS)
                     .build();
             return sClient;
+        }
+    }
+
+    /** 下载专用 client：读超时 120s（百度限速下大文件下载可能长时间无数据，60s 会误断） */
+    private static OkHttpClient sDownloadClient;
+
+    private static OkHttpClient downloadClient() {
+        if (sDownloadClient != null) return sDownloadClient;
+        synchronized (BaiduProvider.class) {
+            if (sDownloadClient != null) return sDownloadClient;
+            sDownloadClient = new OkHttpClient.Builder()
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(120, TimeUnit.SECONDS)
+                    .writeTimeout(60, TimeUnit.SECONDS)
+                    .build();
+            return sDownloadClient;
         }
     }
 
@@ -656,7 +707,8 @@ public class BaiduProvider implements CloudProvider {
             }
             if (errno == 2 && !bdstoken.isEmpty() && attempt == 0) {
                 // 写操作参数错误（常见为 bdstoken 缺失/无效导致）：清缓存重取后仅重试一次
-                LogHelp.w(TAG, "百度 errno=2（写操作被拒），清空 bdstoken 重取重试: " + truncate(last.body, 200));
+                LogHelp.w(TAG, "百度 errno=2（写操作被拒），清空 bdstoken 重取重试: " + truncate(last.body, 200)
+                        + " stack=" + stackTop(5));
                 bdstoken = "";
                 continue;
             }
@@ -699,8 +751,12 @@ public class BaiduProvider implements CloudProvider {
                 throw new CloudException(CloudException.Kind.REMOTE,
                         "百度操作触发安全验证(errno=132)，建议在网页端手动处理");
             }
-            if (errno == 31079 || errno == 31061 || errno == 31081 || errno == 31363) {
-                // 秒传未命中 / 已存在幂等 / 整文件重传：由调用方特判
+            if (errno == 31079 || errno == 31061 || errno == 31081 || errno == 31363 || errno == 10) {
+                // 秒传未命中 / 已存在幂等 / 整文件重传 / 目录或文件已存在（/api/create 对已存在目录返回 errno=10）：
+                // 由调用方特判；errno=10 打调用栈便于确认出现位置（precreate 出现则 uploadId 缺失会显式抛错）
+                if (errno == 10) {
+                    LogHelp.w(TAG, "百度 errno=10（已存在），stack=" + stackTop(5));
+                }
                 return json;
             }
             throw new CloudException(CloudException.Kind.REMOTE,
@@ -850,6 +906,27 @@ public class BaiduProvider implements CloudProvider {
     private static String truncate(String text, int max) {
         if (text == null) return "";
         return text.length() <= max ? text : text.substring(0, max) + "...";
+    }
+
+    /** 调用栈顶部摘要（诊断用，定位 errno=2 等错误出自哪个 API 调用链） */
+    private static String stackTop(int depth) {
+        try {
+            var st = Thread.currentThread().getStackTrace();
+            var sb = new StringBuilder();
+            var count = 0;
+            for (var i = 2; i < st.length && count < depth; i++) {
+                var el = st[i];
+                var cls = el.getClassName();
+                if (cls.startsWith("com.suileyan.")) {
+                    if (sb.length() > 0) sb.append(" <- ");
+                    sb.append(cls.substring(cls.lastIndexOf('.') + 1)).append(".").append(el.getMethodName());
+                    count++;
+                }
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     // ========== 内部模型 ==========

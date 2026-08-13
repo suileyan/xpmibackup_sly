@@ -101,12 +101,14 @@ public class WoProvider implements CloudProvider {
 
     private final CloudAccount account;
 
-    /** GetZoneInfo 会话缓存（动态上传域，volatile + 单飞锁） */
-    private volatile String zoneUrl = "";
-    private final Object zoneLock = new Object();
-    /** ClassifyRule 缓存：扩展名(小写) → type（"1".."5"） */
-    private volatile Map<String, String> fileTypes;
-    private final Object fileTypesLock = new Object();
+    /** GetZoneInfo 会话缓存（动态上传域，volatile + 单飞锁）
+     * static：上传域是区域级配置与账号无关，云盘 Provider 每次上传任务 new 实例，实例级缓存会每次失效
+     * （实测每个文件上传前重复 GetZoneInfo+ClassifyRule 各 1 次 dispatcher 往返） */
+    private static volatile String zoneUrl = "";
+    private static final Object zoneLock = new Object();
+    /** ClassifyRule 缓存：扩展名(小写) → type（"1".."5"）；全局规则，static 跨实例共享 */
+    private static volatile Map<String, String> fileTypes;
+    private static final Object fileTypesLock = new Object();
     /** AppQueryUser 缓存的账号标识（可选展示用，不持久化） */
     private volatile String cachedUserId = "";
     /** 默认家庭空间 ID（FamilyUserCurrentEncode.defaultHomeId；个人空间建目录也须携带，woopen 对齐） */
@@ -524,6 +526,15 @@ public class WoProvider implements CloudProvider {
                 cb.onStart(taskId);
             }
             var size = localFile.length();
+            // 沃盘 upload2C 拒绝 0 字节文件（实测 end 0 字节 HTTP 400，与百度同类限制）：
+            // end 等 0 字节标记文件直接 mock 成功——云端无需真实存在，恢复列表只依赖 descript.xml
+            if (size == 0) {
+                LogHelp.i(TAG, "沃盘跳过 0 字节文件（服务端不支持空文件）: " + localFile.getName());
+                if (cb != null) {
+                    cb.onFinish(taskId, 0, "success");
+                }
+                return;
+            }
             var zone = getZoneInfoCached();
             var uploadUrl = zone + "/openapi/client/upload2C";
             // totalPart 整除后至少 1（upload.go:65-68）；末片取余
@@ -1023,10 +1034,14 @@ public class WoProvider implements CloudProvider {
             if (sClient != null) {
                 return sClient;
             }
+            // 分片上传并发提到 8 时，OkHttp 默认同 host 上限 5 会排队——自定义 Dispatcher 并显式放开 maxRequestsPerHost
+            var dispatcher = new okhttp3.Dispatcher(java.util.concurrent.Executors.newFixedThreadPool(12));
+            dispatcher.setMaxRequestsPerHost(12);
             sClient = new OkHttpClient.Builder()
                     .connectTimeout(15, TimeUnit.SECONDS)
                     .readTimeout(60, TimeUnit.SECONDS)
                     .writeTimeout(300, TimeUnit.SECONDS)
+                    .dispatcher(dispatcher)
                     .build();
             return sClient;
         }

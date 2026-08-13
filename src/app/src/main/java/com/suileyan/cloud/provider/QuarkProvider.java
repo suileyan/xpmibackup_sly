@@ -179,6 +179,10 @@ public class QuarkProvider implements CloudProvider {
             var bucket = preData.optString("bucket", "");
             var uploadHost = preData.optString("upload_url", "");
             var callbackObj = preData.optJSONObject("callback");
+            // 诊断：预上传关键字段（uploadId/objKey 是否含特殊字符——URL 编码与 auth_meta 一致性排查）
+            LogHelp.i(TAG, "夸克 pre task=" + truncate(taskId2, 16) + " uploadId=" + truncate(uploadId, 30)
+                    + " objKey=" + truncate(objKey, 40) + " bucket=" + truncate(bucket, 20)
+                    + " host=" + truncate(uploadHost, 30) + " finish=" + preData.optBoolean("finish", false));
             // 秒传：预上传直接完成（服务端已有该文件）
             if (preData.optBoolean("finish", false) || taskId2.isEmpty()) {
                 callApi("/file/upload/finish", new JSONObject().put("task_id", taskId2).put("obj_key", objKey), null);
@@ -210,7 +214,9 @@ public class QuarkProvider implements CloudProvider {
             var done = false;
             while (offset < size) {
                 var len = (int) Math.min(partSize, size - offset);
-                var putUrl = ossUrl(bucket, uploadHost, objKey) + "?partNumber=" + partNumber + "&uploadId=" + urlEncode(uploadId);
+                // uploadId 不编码（对齐 QuarkPan 参考：URL 与 auth_meta 的 resource 保持一致，否则含特殊字符时
+                // OSS 按 URL 提取 CanonicalizedResource 与 auth_meta 不一致 → SignatureDoesNotMatch 403）
+                var putUrl = ossUrl(bucket, uploadHost, objKey) + "?partNumber=" + partNumber + "&uploadId=" + uploadId;
                 var putMeta = putAuthMeta(authInfo, taskId2, mimeOf(localFile.getName()), bucket, objKey, partNumber, uploadId);
                 var authJson = callApi("/file/upload/auth", putMeta, null);
                 var authKey = authJson.optJSONObject("data") != null
@@ -479,7 +485,9 @@ public class QuarkProvider implements CloudProvider {
         });
         try (var resp = client().newCall(builder.build()).execute()) {
             if (resp.code() != 200) {
-                LogHelp.e(TAG, "夸克 OSS PUT 失败 HTTP " + resp.code() + ": " + truncate(resp.body() != null ? resp.body().string() : "", 200));
+                var body = resp.body() != null ? resp.body().string() : "";
+                // 完整打印 403（含 OSS 返回的 StringToSign/CanonicalizedResource 调试字段——定位签名差异关键）
+                LogHelp.e(TAG, "夸克 OSS PUT 失败 HTTP " + resp.code() + ": " + truncate(body, 1500));
                 return "";
             }
             var etag = resp.header("ETag");

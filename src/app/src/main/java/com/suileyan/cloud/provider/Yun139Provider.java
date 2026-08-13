@@ -21,8 +21,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -300,17 +303,29 @@ public class Yun139Provider implements CloudProvider {
                 throw new CloudException(CloudException.Kind.REMOTE, "139 file not found: " + remotePath);
             }
             var fileId = entry.fileId;
-            var downloadUrl = entry.downloadUrl;
-            if (downloadUrl == null || downloadUrl.isEmpty()) {
-                var urlBody = new JSONObject();
-                urlBody.put("fileId", fileId);
-                var urlJson = callApi("/hcy/file/getDownloadUrl", urlBody);
-                var data = urlJson.optJSONObject("data");
-                if (data != null) {
-                    downloadUrl = data.optString("downloadURL", data.optString("cdnUrl", data.optString("url", "")));
-                }
+            // 不再信任 list 条目里的 downloadUrl：139 新版 list 响应该字段为字符串 "null" 占位
+            // （实证：download start host=null + OkHttp url("null") 抛 "no scheme ... for null"），
+            // cloud139 一律走 getDownloadUrl
+            LogHelp.d(TAG, "139 download find entry name=" + name + " fileId=" + fileId);
+            var downloadUrl = "";
+            var urlBody = new JSONObject();
+            urlBody.put("fileId", fileId);
+            var urlJson = callApi("/hcy/file/getDownloadUrl", urlBody);
+            var data = urlJson.optJSONObject("data");
+            if (data != null) {
+                // 139 响应 data.url 有效、data.cdnUrl 常为 JSON null——optString 链式 fallback 遇 JSON null
+                // 会返回字符串 "null"（而非回退到下一键），必须逐个取值并用 isHttpUrl 校验（"null" 会被拒绝）
+                var u = data.optString("url", "");
+                var cdn = data.optString("cdnUrl", "");
+                downloadUrl = isHttpUrl(u) ? u : (isHttpUrl(cdn) ? cdn : "");
             }
-            if (downloadUrl == null || downloadUrl.isEmpty()) {
+            // 完整 http(s) URL 校验：139 可能返回 "null"/相对路径等占位值，一律视为无效并打响应体
+            if (!isHttpUrl(downloadUrl)) {
+                LogHelp.w(TAG, "139 getDownloadUrl invalid url: fileId=" + fileId
+                        + " resp=" + truncate(urlJson.toString(), 300));
+                downloadUrl = "";
+            }
+            if (downloadUrl.isEmpty()) {
                 LogHelp.e(TAG, "139 missing download url for " + remotePath + " (fileId=" + fileId + ")");
                 throw new CloudException(CloudException.Kind.REMOTE, "139 missing download url: " + remotePath);
             }
@@ -370,6 +385,9 @@ public class Yun139Provider implements CloudProvider {
             body.put("fileIds", ids);
             callApi("/hcy/recyclebin/batchTrash", body);
             LogHelp.i(TAG, "139 trashed: " + remotePath + " (fileId=" + entry.fileId + ")");
+            // 删除改变了目录结构，失效解析缓存与条目缓存避免复用已删除的 fileId
+            clearDirCache();
+            invalidateItemsCache();
         } catch (CloudException e) {
             throw e;
         } catch (Exception e) {
@@ -423,6 +441,9 @@ public class Yun139Provider implements CloudProvider {
             var respBody = resp.body() != null ? resp.body().string() : "";
             if (code == 401 || code == 403) {
                 LogHelp.e(TAG, "139 auth expired: HTTP " + code + " path=" + path + " body=" + truncate(respBody, 300));
+                // 登录态失效可能伴随账号切换/重新登录，目录结构不再可信，清空解析缓存与条目缓存
+                clearDirCache();
+                invalidateItemsCache();
                 throw new CloudException(CloudException.Kind.AUTH_EXPIRED, "139 auth expired: HTTP " + code);
             }
             if (code < 200 || code >= 300) {
@@ -509,8 +530,119 @@ public class Yun139Provider implements CloudProvider {
 
     // ========== 路径解析（移植 yun139.js） ==========
 
+    /** 目录解析缓存 TTL：备份过程中目录结构基本不变，60s 内复用避免每个分片/文件重复全量 list */
+    private static final long DIR_CACHE_TTL_MS = 60_000L;
+    private static final int DIR_CACHE_MAX = 512;
+    /**
+     * 目录解析缓存（static 跨实例共享）：(accountId + "|" + parentFileId + "\0" + name) -> CachedId。
+     * 云盘 Provider 每次调用都重新构造实例（读最新凭据），实例级缓存等于没有缓存——
+     * 备份进程每个分片/恢复列表每次 findEntry 都会重复全量 list；static 后同一账号 60s 内只查一次。
+     * accessOrder=true 实现 LRU，删除/过期时按账号清空。
+     */
+    private static final Map<String, CachedId> DIR_CACHE = Collections.synchronizedMap(new LinkedHashMap<>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, CachedId> eldest) {
+            return size() > DIR_CACHE_MAX;
+        }
+    });
+
+    private static final class CachedId {
+        final String fileId;
+        final long at;
+
+        CachedId(String fileId, long at) {
+            this.fileId = fileId;
+            this.at = at;
+        }
+    }
+
+    private static String dirCacheKey(String accountId, String parentId, String name) {
+        return accountId + "|" + parentId + "\0" + name;
+    }
+
+    private String getDirCache(String parentId, String name) {
+        var key = dirCacheKey(account.id, parentId, name);
+        var e = DIR_CACHE.get(key);
+        if (e == null) return null;
+        if (System.currentTimeMillis() - e.at > DIR_CACHE_TTL_MS) {
+            DIR_CACHE.remove(key);
+            return null;
+        }
+        return e.fileId;
+    }
+
+    private void putDirCache(String parentId, String name, String fileId) {
+        DIR_CACHE.put(dirCacheKey(account.id, parentId, name), new CachedId(fileId, System.currentTimeMillis()));
+    }
+
+    /** 目录结构变化（删除/重新登录）后失效本账号缓存 */
+    private void clearDirCache() {
+        var prefix = account.id + "|";
+        synchronized (DIR_CACHE) {
+            DIR_CACHE.keySet().removeIf(k -> k.startsWith(prefix));
+        }
+    }
+
     /** 分页收集目录下所有条目（list 返回条目结构） */
+    /** 目录条目缓存 TTL：恢复列表每次打开都要遍历全部备份目录 findEntry（每目录 1 次全量 list），
+     * 25 个目录 ≈ 100 次串行请求 = 15-20 秒延迟；60s 内复用目录条目，遍历降为 0-1 次 list */
+    private static final long ITEMS_CACHE_TTL_MS = 60_000L;
+    private static final int ITEMS_CACHE_MAX = 256;
+    /** 目录条目缓存：(accountId + "|" + parentFileId) -> CachedItems；LRU，过期/结构变化时按账号清空 */
+    private static final Map<String, CachedItems> ITEMS_CACHE = Collections.synchronizedMap(new LinkedHashMap<>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, CachedItems> eldest) {
+            return size() > ITEMS_CACHE_MAX;
+        }
+    });
+
+    private static final class CachedItems {
+        final List<Item> items;
+        final long at;
+
+        CachedItems(List<Item> items, long at) {
+            this.items = items;
+            this.at = at;
+        }
+    }
+
+    private List<Item> getItemsCache(String parentFileId) {
+        var key = account.id + "|" + parentFileId;
+        var e = ITEMS_CACHE.get(key);
+        if (e == null) return null;
+        if (System.currentTimeMillis() - e.at > ITEMS_CACHE_TTL_MS) {
+            ITEMS_CACHE.remove(key);
+            return null;
+        }
+        return e.items;
+    }
+
+    private void putItemsCache(String parentFileId, List<Item> items) {
+        ITEMS_CACHE.put(account.id + "|" + parentFileId, new CachedItems(items, System.currentTimeMillis()));
+    }
+
+    /** 目录结构变化（创建/删除/重新登录）后失效本账号条目缓存 */
+    private void invalidateItemsCache() {
+        var prefix = account.id + "|";
+        synchronized (ITEMS_CACHE) {
+            ITEMS_CACHE.keySet().removeIf(k -> k.startsWith(prefix));
+        }
+    }
+
     private List<Item> collectItems(String parentFileId) throws CloudException {
+        // 缓存命中直接复用（恢复列表遍历 25 个备份目录 findEntry，每次全量 list 会累积成秒级延迟）
+        var cached = getItemsCache(parentFileId);
+        if (cached != null) return cached;
+        synchronized (ITEMS_CACHE) {
+            cached = getItemsCache(parentFileId);
+            if (cached != null) return cached;
+            var items = doCollectItems(parentFileId);
+            putItemsCache(parentFileId, items);
+            return items;
+        }
+    }
+
+    private List<Item> doCollectItems(String parentFileId) throws CloudException {
         var items = new ArrayList<Item>();
         var cursor = "";
         for (var guard = 0; guard < 100; guard++) {
@@ -525,9 +657,41 @@ public class Yun139Provider implements CloudProvider {
                 }
             }
             cursor = data.optString("nextPageCursor", "");
-            if (cursor.isEmpty()) break;
+            // 139 分页字段值为字符串 "null"/"undefined" 占位（与 downloadUrl 同类，实证 cursor=null 打印）：
+            // 必须视为"无下一页"，否则分页循环永不终止——每次 resolvePath/listEntries 触发 100 次 list
+            // 死循环（22 list/s 风暴 + 备份卡死 + 恢复列表空的共同根因）
+            if (cursor.isEmpty() || "null".equalsIgnoreCase(cursor) || "undefined".equalsIgnoreCase(cursor)) {
+                break;
+            }
+            // 分页诊断：正常 1 页即结束；超过 2 页或 cursor 异常持续非空说明分页字段解析/服务端异常
+            if (guard >= 2) {
+                LogHelp.w(TAG, "139 collectItems paging parent=" + truncate(parentFileId, 40)
+                        + " page=" + guard + " cursor=" + truncate(cursor, 60)
+                        + " items=" + items.size() + " stack=" + stackTop(6));
+            }
         }
         return items;
+    }
+
+    /** 调用栈顶部摘要（诊断用，定位 list 请求发起者） */
+    private static String stackTop(int depth) {
+        try {
+            var st = Thread.currentThread().getStackTrace();
+            var sb = new StringBuilder();
+            var count = 0;
+            for (var i = 2; i < st.length && count < depth; i++) {
+                var el = st[i];
+                var cls = el.getClassName();
+                if (cls.startsWith("com.suileyan.")) {
+                    if (sb.length() > 0) sb.append(" <- ");
+                    sb.append(cls.substring(cls.lastIndexOf('.') + 1)).append(".").append(el.getMethodName());
+                    count++;
+                }
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /** 列出父目录下条目并转换为 RemoteEntry */
@@ -557,10 +721,18 @@ public class Yun139Provider implements CloudProvider {
         for (var i = 0; i < parts.length; i++) {
             var name = parts[i];
             if (name.isEmpty()) continue;
+            // 已缓存该层级映射直接复用（分片上传/备份目录遍历会反复解析同一路径）
+            var cached = getDirCache(parentId, name);
+            if (cached != null) {
+                parentId = cached;
+                continue;
+            }
             var child = findChild(parentId, name);
             if (child == null) {
                 if (!createMissing) return null;
-                parentId = createFolder(parentId, name);
+                var newId = createFolder(parentId, name);
+                putDirCache(parentId, name, newId);
+                parentId = newId;
                 continue;
             }
             if (!child.isDir) {
@@ -568,37 +740,57 @@ public class Yun139Provider implements CloudProvider {
                 throw new CloudException(CloudException.Kind.REMOTE, "139 path is not folder: " + name);
             }
             parentId = child.fileId;
+            putDirCache(parentId, name, child.fileId);
         }
         return parentId;
     }
 
-    /** 创建目录并返回新目录 fileId */
+    /** 创建目录并返回新目录 fileId
+     * 并发去重：两个上传线程同时 resolvePath 到缺失目录时都会调 createFolder → 139 出现同名重复目录
+     * （实测拼接重复目录 20260811_120245_20260811_120316 等，恢复列表 25 个目录里一半是重复）。
+     * per-account 锁 + 锁内 double-check 目录缓存，避免重复创建。 */
     private String createFolder(String parentFileId, String name) throws CloudException {
-        try {
-            var body = new JSONObject();
-            body.put("type", "folder");
-            body.put("name", name);
-            body.put("parentFileId", parentFileId);
-            // 对齐 alist：建目录不带 localCreatedAt（该字段格式校验严格，缺省最稳）
-            LogHelp.i(TAG, "139 create folder body: " + truncate(body.toString(), 300));
-            var json = callApi("/hcy/file/create", body);
-            var data = json.optJSONObject("data");
-            if (data == null) {
-                throw new CloudException(CloudException.Kind.REMOTE, "139 create folder missing data");
+        synchronized (createLock(account.id)) {
+            // 锁内 double-check：并发线程可能已创建成功并写入 dirCache
+            var cached = getDirCache(parentFileId, name);
+            if (cached != null) {
+                return cached;
             }
-            var id = data.optString("fileId", data.optString("id", ""));
-            if (id.isEmpty()) {
-                LogHelp.e(TAG, "139 create folder missing fileId parent=" + parentFileId + " name=" + name + " resp=" + truncate(json.toString(), 300));
-                throw new CloudException(CloudException.Kind.REMOTE, "139 create folder missing fileId");
+            try {
+                var body = new JSONObject();
+                body.put("type", "folder");
+                body.put("name", name);
+                body.put("parentFileId", parentFileId);
+                // 对齐 alist：建目录不带 localCreatedAt（该字段格式校验严格，缺省最稳）
+                LogHelp.i(TAG, "139 create folder body: " + truncate(body.toString(), 300));
+                var json = callApi("/hcy/file/create", body);
+                var data = json.optJSONObject("data");
+                if (data == null) {
+                    throw new CloudException(CloudException.Kind.REMOTE, "139 create folder missing data");
+                }
+                var id = data.optString("fileId", data.optString("id", ""));
+                if (id.isEmpty()) {
+                    LogHelp.e(TAG, "139 create folder missing fileId parent=" + parentFileId + " name=" + name + " resp=" + truncate(json.toString(), 300));
+                    throw new CloudException(CloudException.Kind.REMOTE, "139 create folder missing fileId");
+                }
+                LogHelp.i(TAG, "139 create folder ok name=" + name + " parent=" + parentFileId + " -> " + id);
+                putDirCache(parentFileId, name, id);
+                invalidateItemsCache();
+                return id;
+            } catch (CloudException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new CloudException(CloudException.Kind.REMOTE, e);
             }
-            LogHelp.i(TAG, "139 create folder ok name=" + name + " parent=" + parentFileId + " -> " + id);
-            return id;
-        } catch (CloudException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new CloudException(CloudException.Kind.REMOTE, e);
         }
     }
+
+    /** per-account 创建锁（防止并发 mkdirs 重复建目录） */
+    private static Object createLock(String accountId) {
+        return CREATE_LOCKS.computeIfAbsent(accountId, k -> new Object());
+    }
+
+    private static final java.util.Map<String, Object> CREATE_LOCKS = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** 按父路径与文件名查找条目 */
     private Item findEntry(String parentPath, String targetName) throws CloudException {
@@ -673,6 +865,13 @@ public class Yun139Provider implements CloudProvider {
     private static String truncate(String text, int max) {
         if (text == null) return "";
         return text.length() <= max ? text : text.substring(0, max) + "...";
+    }
+
+    /** 完整 http(s) URL 校验：过滤 "null"/"undefined"/相对路径等占位值 */
+    private static boolean isHttpUrl(String url) {
+        if (url == null) return false;
+        var u = url.trim().toLowerCase(Locale.ROOT);
+        return u.startsWith("http://") || u.startsWith("https://");
     }
 
     /** 提取 URL 主机用于日志（uploadUrl/downloadUrl 可能带签名参数，只记录 host） */

@@ -44,6 +44,7 @@ import javax.crypto.spec.SecretKeySpec;
 import okhttp3.FormBody;
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
+import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -86,6 +87,8 @@ public class Pan115Provider implements CloudProvider {
     private static final String OSS_UA = "aliyun-sdk-android/2.9.1";
     private static final String REFERER = "https://115.com/";
     private static final String ROOT_CID = "0";
+    /** OSS POST 直传 file 字段 content-type */
+    private static final MediaType OCTET = MediaType.parse("application/octet-stream");
 
     private static final int PAGE_SIZE = 1000;
     /** HTTP 429/5xx 退避重试上限 */
@@ -93,19 +96,20 @@ public class Pan115Provider implements CloudProvider {
     private static final int BUFFER_SIZE = 64 * 1024;
 
     private final CloudAccount account;
-    /** 路径→cid 缓存（LRU，减少 getid 调用） */
-    private final Map<String, String> cidCache;
+    /** 路径→cid 缓存（LRU，减少 getid 调用）
+     * static：云盘 Provider 每次上传/下载任务 new 实例，实例级缓存每次失效——
+     * 恢复列表遍历每个备份目录都重新 getid（实测 405 风控拦截页），键含 accountId 防跨账号冲突 */
+    private static final Map<String, String> cidCache = new LinkedHashMap<>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+            return size() > 512;
+        }
+    };
 
     private static OkHttpClient sClient;
 
     public Pan115Provider(CloudAccount account) {
         this.account = account;
-        this.cidCache = new LinkedHashMap<>(64, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
-                return size() > 256;
-            }
-        };
     }
 
     @Override
@@ -244,7 +248,15 @@ public class Pan115Provider implements CloudProvider {
         if (arr == null) return null;
         for (var i = 0; i < arr.length(); i++) {
             var o = arr.optJSONObject(i);
-            if (o != null && parts[1].equals(o.optString("n", ""))) return o;
+            if (o != null && parts[1].equals(o.optString("n", ""))) {
+                // 诊断：打印匹配条目的全部字段（115 新版列表可能精简字段，pickcode 名须实证）
+                var ks = new java.util.ArrayList<String>();
+                var kit = o.keys();
+                while (kit.hasNext()) ks.add(kit.next());
+                LogHelp.i(TAG, "115 findEntry match: " + parts[1]
+                        + " keys=" + ks + " resp=" + truncate(o.toString(), 400));
+                return o;
+            }
         }
         return null;
     }
@@ -254,13 +266,13 @@ public class Pan115Provider implements CloudProvider {
         var v = trimSlashes(path);
         if (v.isEmpty()) return ROOT_CID;
         synchronized (cidCache) {
-            var hit = cidCache.get(v);
+            var hit = cidCache.get(cidKey(v));
             if (hit != null) return hit;
         }
         var cid = getIdByPath(v);
         if (cid != null) {
             synchronized (cidCache) {
-                cidCache.put(v, cid);
+                cidCache.put(cidKey(v), cid);
             }
             return cid;
         }
@@ -274,7 +286,7 @@ public class Pan115Provider implements CloudProvider {
             if (name.isEmpty()) continue;
             curPath = curPath.isEmpty() ? name : curPath + "/" + name;
             synchronized (cidCache) {
-                var hit = cidCache.get(curPath);
+                var hit = cidCache.get(cidKey(curPath));
                 if (hit != null) {
                     cur = hit;
                     continue;
@@ -283,7 +295,7 @@ public class Pan115Provider implements CloudProvider {
             var c = getIdByPath(curPath);
             if (c != null) {
                 synchronized (cidCache) {
-                    cidCache.put(curPath, c);
+                    cidCache.put(cidKey(curPath), c);
                 }
                 cur = c;
                 continue;
@@ -295,6 +307,10 @@ public class Pan115Provider implements CloudProvider {
 
     /** getid 查询（目录不存在返回 null）；path 为相对路径（去前导 /） */
     private String getIdByPath(String relPath) throws CloudException {
+        if (inRiskWindow()) {
+            // 风控冷却期：跳过请求（listEntries 会因此枚举失败，但避免持续 405 刷屏/加重风控）
+            return null;
+        }
         var params = new LinkedHashMap<String, String>();
         params.put("path", relPath);
         var json = executeGet(API_GET_ID, params);
@@ -320,7 +336,7 @@ public class Pan115Provider implements CloudProvider {
             throw new CloudException(CloudException.Kind.REMOTE, "115 建目录失败: " + fullPath);
         }
         synchronized (cidCache) {
-            cidCache.put(fullPath, cid);
+            cidCache.put(cidKey(fullPath), cid);
         }
         return cid;
     }
@@ -346,26 +362,23 @@ public class Pan115Provider implements CloudProvider {
             }
             if (cb != null) cb.onStart(taskId);
             var size = localFile.length();
-            // 1) 网页端上传初始化（无秒传）：拿 bucket/object/callback
+            // 1) sampleinitupload（明文）：返回 OSS POST 直传凭证
+            //    {object, accessid, policy, signature, host, expire, callback(base64)}——
+            //    callback 是 base64 字符串（{"callbackUrl":"http://uplb.115.com/..."}），
+            //    作为 POST 表单字段随文件直传，OSS 上传成功后回调 115 注册文件到目录
             var init = sampleInit(localFile.getName(), cid);
-            var bucket = init.optString("bucket", "");
             var object = init.optString("object", "");
-            if (bucket.isEmpty() && init.has("host")) {
-                // 115 响应无 bucket 字段：从 host 子域名解析（https://{bucket}.oss-xxx.aliyuncs.com）
-                var host = init.optString("host", "");
-                if (!host.isEmpty()) {
-                    var h = host.replaceFirst("^https?://", "");
-                    var dot = h.indexOf('.');
-                    if (dot > 0) bucket = h.substring(0, dot);
-                }
-            }
-            var callback = init.optJSONObject("callback");
-            if (bucket.isEmpty() || object.isEmpty()) {
+            var host = init.optString("host", "");
+            var policy = init.optString("policy", "");
+            var accessid = init.optString("accessid", "");
+            var signature = init.optString("signature", "");
+            var callbackB64 = init.optString("callback", "");
+            if (object.isEmpty() || host.isEmpty() || policy.isEmpty() || accessid.isEmpty() || signature.isEmpty()) {
                 throw new CloudException(CloudException.Kind.REMOTE,
-                        "115 sampleinitupload 缺 bucket/object: " + truncate(init.toString(), 200));
+                        "115 sampleinitupload 缺 POST 直传凭证: " + truncate(init.toString(), 300));
             }
-            // 2) OSS 直传
-            ossPut(bucket, object, callback, localFile, cb, taskId, size);
+            // 2) OSS POST 表单直传（key/policy/OSSAccessKeyId/signature/callback + file）
+            ossPost(host, object, policy, accessid, signature, callbackB64, localFile, cb, taskId, size);
             if (cb != null) cb.onFinish(taskId, 0, "success");
         } catch (CloudException e) {
             if (cb != null) cb.onFinish(taskId, -1, e.getMessage());
@@ -388,58 +401,29 @@ public class Pan115Provider implements CloudProvider {
             var d = json.optJSONObject("data");
             if (d != null) json = d;
         }
+        // 诊断：打印初始化响应的关键字段（status 2=秒传命中无 OSS 上传；1=走 OSS；bucket 可能从 host 解析）
+        LogHelp.i(TAG, "115 sampleinitupload status=" + json.optInt("status", -1)
+                + " statuscode=" + json.optInt("statuscode", -1)
+                + " hasBucket=" + json.has("bucket") + " hasCallback=" + json.has("callback")
+                + " hasCallbackVar=" + json.has("callback_var")
+                + " hasAccessid=" + json.has("accessid") + " hasPolicy=" + json.has("policy")
+                + " hasSignature=" + json.has("signature")
+                + " object=" + truncate(json.optString("object", ""), 40)
+                + " host=" + truncate(json.optString("host", ""), 60)
+                + " resp=" + truncate(json.toString(), 400));
         return json;
     }
 
-    /** OSS 直传（单 PUT，≤64MB 分片由 CloudFileHelp 统一切分；x-oss-callback 注册到 115） */
-    private void ossPut(String bucket, String object, JSONObject callback, File file,
-                        ProgressCallback cb, String taskId, long size) throws CloudException {
-        // 1) 上传环境：endpoint + gettokenurl（endpoint 可能带 http(s):// 前缀，剥离后拼接 OSS 域名）
-        var info = executeGet(API_UPLOAD_INFO);
-        var endpoint = stripProtocol(info.optString("endpoint", ""));
-        var getTokenUrl = info.optString("gettokenurl", "");
-        if (endpoint.isEmpty() || getTokenUrl.isEmpty()) {
-            throw new CloudException(CloudException.Kind.REMOTE,
-                    "115 getuploadinfo 缺 endpoint/gettokenurl: " + truncate(info.toString(), 200));
-        }
-        // 2) OSS 临时凭证
-        var token = executeGet(getTokenUrl);
-        var akId = token.optString("AccessKeyId", "");
-        var akSecret = token.optString("AccessKeySecret", "");
-        var securityToken = token.optString("SecurityToken", "");
-        if (akId.isEmpty() || akSecret.isEmpty() || securityToken.isEmpty()) {
-            throw new CloudException(CloudException.Kind.REMOTE,
-                    "115 gettoken 缺 OSS 凭证: " + truncate(token.toString(), 200));
-        }
-        // 3) 构造签名头（x-oss-* 小写名，TreeMap 自动排序）
-        var ossHeaders = new TreeMap<String, String>();
-        ossHeaders.put("x-oss-security-token", securityToken);
-        if (callback != null) {
-            var cbStr = callback.optString("callback", "");
-            var cbVar = callback.optString("callback_var", "");
-            if (!cbStr.isEmpty()) ossHeaders.put("x-oss-callback", b64(cbStr));
-            if (!cbVar.isEmpty()) ossHeaders.put("x-oss-callback-var", b64(cbVar));
-        }
-        var contentType = "application/octet-stream";
-        var date = httpDate();
-        var signatureData = new StringBuilder();
-        signatureData.append("PUT\n");
-        signatureData.append('\n'); // Content-MD5 空
-        signatureData.append(contentType).append('\n');
-        signatureData.append(date).append('\n');
-        for (var e : ossHeaders.entrySet()) {
-            signatureData.append(e.getKey()).append(':').append(e.getValue()).append('\n');
-        }
-        signatureData.append('/').append(bucket).append('/').append(object);
-        var sig = hmacSha1Base64(akSecret, signatureData.toString());
-        var authorization = "OSS " + akId + ":" + sig;
-
-        // OSS 用 https（sampleinitupload 下发的 host 即 https；明文 http 会被 Android 网络安全策略拦截）
-        var url = "https://" + bucket + "." + endpoint + "/" + object;
-        var body = new RequestBody() {
+    /** OSS POST 表单直传（浏览器模式，实测 sampleinitupload 返回 POST 直传凭证）：
+     * POST {host}/ 表单：key=object + policy + OSSAccessKeyId + signature + callback(base64) + file；
+     * callback 作为表单字段，OSS 上传成功后回调 115 注册文件到目录（PUT+header 模式不注册，恢复列表 entries=0）
+     */
+    private void ossPost(String host, String object, String policy, String accessid, String signature,
+                         String callbackB64, File file, ProgressCallback cb, String taskId, long size) throws CloudException {
+        var fileBody = new RequestBody() {
             @Override
             public MediaType contentType() {
-                return MediaType.parse(contentType);
+                return OCTET;
             }
 
             @Override
@@ -461,24 +445,31 @@ public class Pan115Provider implements CloudProvider {
                 }
             }
         };
-        var builder = new Request.Builder().url(url)
-                .header("x-oss-security-token", securityToken)
-                .header("Content-Type", contentType)
-                .header("Date", date)
-                .header("Authorization", authorization)
-                .header("User-Agent", OSS_UA);
-        if (callback != null) {
-            var cbStr = callback.optString("callback", "");
-            var cbVar = callback.optString("callback_var", "");
-            if (!cbStr.isEmpty()) builder.header("x-oss-callback", b64(cbStr));
-            if (!cbVar.isEmpty()) builder.header("x-oss-callback-var", b64(cbVar));
+        var mb = new MultipartBody.Builder().setType(MultipartBody.FORM);
+        mb.addFormDataPart("key", object);
+        mb.addFormDataPart("policy", policy);
+        mb.addFormDataPart("OSSAccessKeyId", accessid);
+        mb.addFormDataPart("signature", signature);
+        if (callbackB64 != null && !callbackB64.isEmpty()) {
+            mb.addFormDataPart("callback", callbackB64);
         }
-        var resp = execute(builder.put(body).build());
+        mb.addFormDataPart("file", file.getName(), fileBody);
+        var req = new Request.Builder().url(host)
+                .header("User-Agent", OSS_UA)
+                .post(mb.build())
+                .build();
+        var resp = execute(req);
         if (resp.code < 200 || resp.code >= 300) {
             throw new CloudException(CloudException.Kind.REMOTE,
-                    "115 OSS 上传 HTTP " + resp.code + ": " + truncate(resp.body, 300));
+                    "115 OSS POST 上传 HTTP " + resp.code + ": " + truncate(resp.body, 300));
         }
-        LogHelp.i(TAG, "115 OSS 上传完成: " + object + " size=" + size);
+        if (resp.code == 203) {
+            // OSS 203 = 文件已保存但 callback 未注册成功（115 目录无此文件）→ 恢复列表 entries=0
+            LogHelp.e(TAG, "115 OSS callback 注册失败(203): " + truncate(resp.body, 400));
+            throw new CloudException(CloudException.Kind.REMOTE,
+                    "115 OSS callback 注册失败(203): " + truncate(resp.body, 200));
+        }
+        LogHelp.i(TAG, "115 OSS 上传完成: " + object + " size=" + size + " code=" + resp.code);
     }
 
     // ========== 下载（downurl RSA+XOR 加密） ==========
@@ -495,6 +486,13 @@ public class Pan115Provider implements CloudProvider {
             }
             var pickCode = entry.optString("pickcode", "");
             if (pickCode.isEmpty()) {
+                // 115 列表条目 pickcode 字段名实测为 "pc"（2026-08：keys 含 fid/cid/n/s/.../pc）——多字段兼容
+                pickCode = entry.optString("pick_code", "");
+            }
+            if (pickCode.isEmpty()) {
+                pickCode = entry.optString("pc", "");
+            }
+            if (pickCode.isEmpty()) {
                 throw new CloudException(CloudException.Kind.REMOTE, "115 缺少 pickcode: " + remotePath);
             }
             var dlUrl = getDownloadUrl(pickCode);
@@ -509,6 +507,10 @@ public class Pan115Provider implements CloudProvider {
             try (var resp = client().newCall(builder.build()).execute()) {
                 var code = resp.code();
                 if (code < 200 || code >= 300) {
+                    // 诊断：下载 403 打印 body（XML/JSON 错误码定位——签名/风控/域变化）+ URL host（不打印完整 URL 防敏感）
+                    var body = resp.body() != null ? resp.body().string() : "";
+                    LogHelp.e(TAG, "115 下载 HTTP " + code + " host=" + hostOf(dlUrl)
+                            + " body=" + truncate(body, 300));
                     throw new CloudException(CloudException.Kind.REMOTE, "115 下载 HTTP " + code);
                 }
                 var body = resp.body();
@@ -566,15 +568,20 @@ public class Pan115Provider implements CloudProvider {
                         "115 downurl 缺 data: " + truncate(resp.body, 200));
             }
             var decrypted = decode115(data, key);
-            var arr = new JSONArray(new String(decrypted, StandardCharsets.UTF_8));
-            if (arr.length() > 0) {
-                var first = arr.optJSONObject(0);
-                if (first != null) return first.optString("url", "");
+            var plain = new String(decrypted, StandardCharsets.UTF_8);
+            var u = parseDownloadUrl(plain);
+            if (!u.isEmpty()) {
+                LogHelp.i(TAG, "115 downurl ok pick=" + truncate(pickCode, 12)
+                        + " dataLen=" + data.length() + " urlLen=" + u.length());
+                return u;
             }
             return "";
         } catch (CloudException e) {
             throw e;
         } catch (Exception e) {
+            // 诊断：打印响应 body（密文 data 长度）与异常，定位 RSA+XOR 解密失败原因
+            LogHelp.e(TAG, "115 downurl 解析失败 pick=" + truncate(pickCode, 12)
+                    + " resp=" + truncate(resp.body, 300) + " err=" + e);
             // 服务端可能直接返回明文 JSON（加密未启用时），探测兼容
             try {
                 var json = new JSONObject(resp.body);
@@ -592,7 +599,6 @@ public class Pan115Provider implements CloudProvider {
             throw new CloudException(CloudException.Kind.REMOTE, "115 downurl 解析失败", e);
         }
     }
-
     // ========== 删除（rb/delete；目录递归子项） ==========
 
     @Override
@@ -685,6 +691,11 @@ public class Pan115Provider implements CloudProvider {
 
     /** 请求统一出口：HTTP 429/5xx 退避重试；最终 parseApiResponse 映射错误 */
     private JSONObject withRetry(ApiCall call) throws CloudException {
+        // 风控冷却期：所有 115 API 请求短路（getid/files/downurl 等）——避免反复请求加重风控、延长风控时长
+        if (inRiskWindow()) {
+            throw new CloudException(CloudException.Kind.REMOTE,
+                    "115 风控冷却中（请等待数分钟，或网页端登录 115.com 验证后重试）");
+        }
         var last = new HttpResponse();
         for (var attempt = 0; attempt <= MAX_RETRY; attempt++) {
             if (attempt > 0) {
@@ -755,6 +766,13 @@ public class Pan115Provider implements CloudProvider {
             throw new CloudException(CloudException.Kind.AUTH_EXPIRED, "115 未登录或 Cookie 已失效 (HTTP " + resp.code + ")");
         }
         if (resp.code < 200 || resp.code >= 300) {
+            // 405 + HTML 拦截页（<!doctypehtml> / <title>405</title>）= 115 WAF 风控拦截（实测 13:47 起高频请求触发），
+            // 非接口错误：需等待冷却或网页端验证解除，明确提示避免误判为 bug
+            if (resp.code == 405 && resp.body.contains("<!doctype")) {
+                markRiskWindow();
+                throw new CloudException(CloudException.Kind.REMOTE,
+                        "115 请求触发风控拦截(HTTP 405)，请等待数分钟或网页端登录 115.com 验证后重试");
+            }
             throw new CloudException(CloudException.Kind.REMOTE,
                     "115 API HTTP " + resp.code + ": " + truncate(resp.body, 200));
         }
@@ -926,12 +944,15 @@ public class Pan115Provider implements CloudProvider {
         }
     }
 
-    /** RSA 伪解密（crypto.go L127-146）：逐 128 块 c^E mod N，取第一个 0x00 后段（公钥即可，服务端私钥加密） */
+    /** RSA 伪解密（crypto.go L127-146）：逐 128 块 c^E mod N，取第一个 0x00 后段（公钥即可，服务端私钥加密）。
+     * block 必须用 (bitLength+7)/8 而非 n.toByteArray().length：1024-bit 模数最高位为 1 时
+     * toByteArray() 返回 129 字节（Java 补符号位），导致多块密文错位 → 模幂结果无 0x00 → 解密失败
+     * （实测：descript.xml 下载地址 >117 字节明文 = 2 块，第二块从 129 偏移错位） */
     private static byte[] rsaDecode(byte[] input) throws Exception {
         var publicKey = (java.security.interfaces.RSAPublicKey) rsaPublicKey();
         var e = publicKey.getPublicExponent();
         var n = publicKey.getModulus();
-        var block = n.toByteArray().length;
+        var block = (n.bitLength() + 7) / 8;
         var out = new ByteArrayOutputStream();
         for (var offset = 0; offset < input.length; offset += block) {
             var size = Math.min(block, input.length - offset);
@@ -954,6 +975,46 @@ public class Pan115Provider implements CloudProvider {
             if (b[i] == 0) return i;
         }
         return -1;
+    }
+
+    /**
+     * 解析 downurl 解密后的下载地址 JSON（对齐 115drive-webdav types.go）：
+     * 顶层为 map&lt;fid, DownloadInfo&gt;（实测 {"<fid>":{"file_name":...,"url":{"url":"https://...","client":...}}}），
+     * 真正地址在 url.url。兼容旧格式（顶层数组 / url 为字符串）。
+     */
+    private static String parseDownloadUrl(String plain) {
+        try {
+            // 1) 顶层对象：fid → info → url{url}
+            var obj = new JSONObject(plain);
+            var keys = obj.keys();
+            if (keys.hasNext()) {
+                var info = obj.optJSONObject(keys.next());
+                if (info != null) {
+                    var u = info.optString("url", "");
+                    if (!u.isEmpty() && u.startsWith("http")) return u;
+                    var urlObj = info.optJSONObject("url");
+                    if (urlObj != null) {
+                        u = urlObj.optString("url", "");
+                        if (u.startsWith("http")) return u;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // 非对象，继续尝试数组/其他
+        }
+        try {
+            // 2) 顶层数组（旧格式）
+            var arr = new JSONArray(plain);
+            if (arr.length() > 0) {
+                var first = arr.optJSONObject(0);
+                if (first != null) {
+                    var u = first.optString("url", "");
+                    if (u.startsWith("http")) return u;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
     }
 
     // ========== OSS 签名辅助 ==========
@@ -997,9 +1058,35 @@ public class Pan115Provider implements CloudProvider {
 
     // ========== 工具 ==========
 
+    /** 缓存键：accountId + path（static 缓存跨实例共享，防止多账号 cid 冲突） */
+    private String cidKey(String path) {
+        return account.id + "\0" + path;
+    }
+
+    /** 风控冷却：115 WAF 拦截（405 HTML 页）后 5 分钟内不再发起任何 API 请求（实测风控持续数分钟，60s 冷却不够） */
+    private static volatile long sRiskWindowUntil = 0L;
+
+    private static void markRiskWindow() {
+        sRiskWindowUntil = System.currentTimeMillis() + 300_000L;
+    }
+
+    private static boolean inRiskWindow() {
+        return System.currentTimeMillis() < sRiskWindowUntil;
+    }
+
     private static String truncate(String s, int max) {
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    /** 提取 URL host（仅用于诊断，不打印完整 URL 防敏感） */
+    private static String hostOf(String url) {
+        try {
+            var u = new java.net.URL(url);
+            return u.getHost();
+        } catch (Exception e) {
+            return "?";
+        }
     }
 
     /** 去首尾 /，保留内部结构（"" 表示根） */
