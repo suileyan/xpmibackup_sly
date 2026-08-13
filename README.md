@@ -8,9 +8,9 @@
 
 ![Upstream](https://img.shields.io/badge/Upstream-XPoser__MiBackup-blue)
 
-本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘、联通沃盘与 115 网盘内置 Provider、OAuth2/会话自动刷新等能力。
+本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘、联通沃盘内置 Provider、OAuth2/会话自动刷新等能力。
 
-通过 Xposed 模块虚拟小米智能存储设备，将小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘、联通沃盘、115 网盘，实现备份与恢复数据的云端存储。
+通过 Xposed 模块虚拟小米智能存储设备，将小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘、联通沃盘，实现备份与恢复数据的云端存储。
 
 ## 原理
 
@@ -20,7 +20,7 @@
 小米备份 App
   -> 查询智能存储设备：返回虚拟设备
   -> 连接 DFS 服务：模拟在线和已连接
-  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭 / 夸克 / 123 / 189 / 百度 / 联通沃盘 / 115
+  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭 / 夸克 / 123 / 189 / 百度 / 联通沃盘
   -> DFS AIDL 下载：从对应云端读取
   -> 进度与完成回调：回传给小米备份原流程
 ```
@@ -31,8 +31,8 @@
 
 - 在系统设置中注入「云备份助手」配置入口
 - 拦截 DFS 连接，模拟小米智能存储设备在线状态
-- 支持十一种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘、联通沃盘、115 网盘
-- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/123/189/百度/沃盘/115）可并存，按需切换备份目标
+- 支持十种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘、联通沃盘
+- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/123/189/百度/沃盘）可并存，按需切换备份目标
 - 凭据加密存储：密码、Token、Cookie 经 AES-GCM 加密落盘，按账号隔离
 - 网盘 Token 自动刷新：光鸭 OAuth2 refresh_token 自动轮换；夸克 __puus 会话自动续期，401 自动重试；天翼 refreshToken 自动轮换 + accessToken 过期自愈
 - 大文件在 Cloud 层统一切片上传，十一种协议共用同一套切片逻辑
@@ -76,7 +76,7 @@
 │  SmbProvider  │  Yun139Provider   │  Pan123Provider   │  ScriptProvider     │
 │  WebdavProvider│ GuangyaProvider  │  TianyiProvider   │  (Rhino JS 沙箱 v2) │
 │  (继承基类)   │  QuarkProvider    │  BaiduProvider    │  (继承基类)         │
-│               │  WoProvider       │  Pan115Provider   │                     │
+│               │  WoProvider       │   （已撤销 115）  │                     │
 │               │  (继承基类)       │  (继承基类)       │                     │
 └───────────────┴──────────────────┴──────────────────┴─────────────────────┘
 ```
@@ -152,7 +152,8 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 | 天翼云盘(189) | SSON Cookie + access_token + refresh_token | WebView 网页登录捕获 | refreshToken 自动轮换；InvalidAccessToken/InvalidSessionKey 自愈重试 | 会话失效则引导重新登录 |
 | 百度网盘   | Cookie（含 BDUSS）            | WebView 网页登录捕获 | 不支持（BDUSS 无刷新机制）         | BDUSS 失效则引导重新登录     |
 | 联通沃盘   | access_token（36 位 UUID）    | WebView 网页登录捕获 | 无 refresh_token，9999 时用现有 access_token 重试一次 | 1001 无效令牌则引导重新登录 |
-| 115 网盘   | Cookie（UID/CID/SEID/KID）   | WebView 网页登录捕获 | 不支持（Cookie 型）              | errno 40100 / user_id=0 则引导重新登录 |
+
+> **115 网盘已撤销支持**：其 WebView Cookie 凭据（UID/CID/SEID/KID）与 `webapi.115.com` 直连实现仍在代码中保留，但因 115 对高频 API 请求的风控过于频繁（账号级 405 拦截持续数分钟），实际无法稳定用于备份/恢复，故从 v0.8.0 起对外移除（UI 隐藏全部入口，历史账号数据保留）。
 
 ### 光鸭云盘 OAuth2 刷新
 
@@ -203,16 +204,11 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 - **上传**：`upload2C` 8MiB 分片直传（`secret=true` 加密请求体）；`QueryAllFiles` 列表
 - **过期处理**：`RSP_CODE=1001` → `AUTH_EXPIRED` 引导重新登录；`9999 系统异常` 时无 refresh_token（web 端仅提供 UUID token）用现有 access_token 重试一次
 
-### 115 网盘（115）
+### 115 网盘（已撤销支持，v0.8.0 起）
 
-115 无开放 OAuth，凭据为网页登录后的完整 Cookie（核心 `UID/CID/SEID/KID`），直连 `webapi.115.com`：
-
-- **登录**：WebView 加载 `115.com`，捕获 Cookie 按名去重合并；`check/sso` 验证（`user_id>0` 有效）
-- **建目录 / 复用**：`files/add` 建目录（成功响应 errno 为空串 `""`，约定 state:true 即成功）；目录已存在返回 20004 幂等，`files/getid` 反查（响应字段为 `id`）复用
-- **上传（OSS 直传）**：`sampleinitupload` 取 OSS 凭证（bucket 为 host 子域名，如 `fhnfile`）→ `getuploadinfo`/`gettoken` 取 endpoint 与临时凭证 → OSS `PUT` 分片直传（`x-oss-callback` 注册，endpoint 剥离协议前缀、统一 https）→ 完成
-- **下载**：`downurl` 取加密直链，RSA+XOR 解密后流式下载
-- **删除**：`rb/delete`（`fid[]`/`pid`/`ignore_warn`）目录递归
-- **过期处理**：HTTP 401 / errno 40100 / `user_id==0` → `AUTH_EXPIRED` 引导重新登录
+> 115 网盘因风控过于频繁（账号级 405 拦截持续数分钟、下载 URL 亦被限）无法稳定支撑备份/恢复，**v0.8.0 起对外撤销支持**：UI 全部入口隐藏（添加页、备份目标、账号列表），已登录账号数据保留。实现代码（`Pan115Provider`，OSS POST 直传 + downurl RSA+XOR 解密）仍保留，若 115 风控策略缓解可恢复。
+>
+> 曾实现要点：WebView 捕获 Cookie（`UID/CID/SEID/KID`）→ `files/add` 建目录 → `sampleinitupload` 取 OSS 凭证（POST 表单直传，callback 注册）→ `downurl` RSA+XOR 解密取直链下载 → `rb/delete` 删除。
 
 ### 139 云盘签名与路由
 
@@ -326,7 +322,7 @@ app/src/main/java/com/suileyan/
     CloudProvider 实现：SmbProvider / WebdavProvider / ScriptProvider
                       Yun139Provider / GuangyaProvider / QuarkProvider
                       Pan123Provider / TianyiProvider / BaiduProvider
-                      WoProvider / Pan115Provider  (provider/)
+                      WoProvider  (provider/；Pan115Provider 已撤销支持，代码保留)
     ProviderRegistry.java         Provider 注册表与活跃目标分发
     ProfileStore / Profile        NAS 方案持久化与模型
     CloudAccountStore / CloudAccount  云盘账号持久化与模型

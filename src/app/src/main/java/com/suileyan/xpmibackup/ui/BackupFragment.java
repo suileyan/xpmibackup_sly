@@ -114,7 +114,13 @@ public class BackupFragment extends Fragment {
             if (getActivity() == null) return;
             getActivity().runOnUiThread(() -> {
                 if (!isAdded()) return;
-                cloudAccounts = accounts;
+                // 115 网盘已撤销支持：从目标选择列表隐藏已登录的 115 账号
+                var visible = new ArrayList<CloudAccount>();
+                for (var a : accounts) {
+                    if (com.suileyan.cloud.CloudAccount.PROVIDER_115.equals(a.provider)) continue;
+                    visible.add(a);
+                }
+                cloudAccounts = visible;
                 var names = new ArrayList<String>();
                 for (var a : cloudAccounts) {
                     names.add(com.suileyan.cloud.AccountDisplay.display(a));

@@ -76,6 +76,8 @@ public class AccountConfigFragment extends Fragment {
                 }
                 tvEmpty.setVisibility(View.GONE);
                 for (var account : accounts) {
+                    // 115 网盘已撤销支持：账号列表隐藏（对外不可用）
+                    if (com.suileyan.cloud.CloudAccount.PROVIDER_115.equals(account.provider)) continue;
                     // 老账号 uid 回填放在刷新时机执行（展示函数不再写盘，HIGH-04）
                     com.suileyan.cloud.AccountDisplay.healAccountUidIfNeeded(account);
                     accountList.addView(createAccountRow(account));
