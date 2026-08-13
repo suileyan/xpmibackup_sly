@@ -86,18 +86,16 @@ public class AboutFragment extends Fragment {
         });
     }
 
-    /** 发现新版本弹窗：「前往下载」GitHub 页 + 「下载 APK」直链；可点空白/返回取消 */
+    /** 发现新版本弹窗：「前往下载」GitHub 页 + 「下载 APK」123 网盘分享链接；可点空白/返回取消 */
     private void showUpdateDialog(String version, String htmlUrl, String downloadUrl) {
         var builder = new AlertDialog.Builder(getActivity())
                 .setTitle(R.string.about_title)
                 .setMessage(getString(R.string.about_new_version, version))
                 .setNegativeButton(android.R.string.cancel, null)
                 .setCancelable(true);
-        // 下载 APK：默认 GitHub 官方直链（无安全警报）；仅显式配置 update_mirror 时走镜像
-        if (!downloadUrl.isEmpty()) {
-            builder.setNeutralButton(R.string.about_download_apk,
-                    (d, w) -> openBrowser(UpdateChecker.downloadUrlWithMirror(downloadUrl)));
-        }
+        // 下载 APK：固定指向 123 网盘分享链接（国内可达）；config.ini download_url 可覆盖
+        builder.setNeutralButton(R.string.about_download_apk,
+                (d, w) -> openBrowser(UpdateChecker.apkDownloadUrl()));
         builder.setPositiveButton(R.string.about_open_browser, (d, w) -> openBrowser(htmlUrl));
         var dialog = builder.create();
         // 点击空白处取消弹窗

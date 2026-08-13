@@ -159,18 +159,16 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** 发现新版本小窗：可点空白/返回取消；「前往下载」GitHub 页 + 「下载 APK」直链 */
+    /** 发现新版本小窗：可点空白/返回取消；「前往下载」GitHub 页 + 「下载 APK」123 网盘分享链接 */
     private void showUpdateDialog(UpdateChecker.Result result) {
         var builder = new AlertDialog.Builder(this)
                 .setTitle(R.string.about_title)
                 .setMessage(getString(R.string.about_new_version, result.latestVersion))
                 .setNegativeButton(android.R.string.cancel, null)
                 .setCancelable(true);
-        // 下载 APK：默认 GitHub 官方直链（无安全警报）；仅显式配置 update_mirror 时走镜像
-        if (!result.downloadUrl.isEmpty()) {
-            builder.setNeutralButton(R.string.about_download_apk,
-                    (d, w) -> openUpdateBrowser(UpdateChecker.downloadUrlWithMirror(result.downloadUrl)));
-        }
+        // 下载 APK：固定指向 123 网盘分享链接（国内可达）；config.ini download_url 可覆盖
+        builder.setNeutralButton(R.string.about_download_apk,
+                (d, w) -> openUpdateBrowser(UpdateChecker.apkDownloadUrl()));
         builder.setPositiveButton(R.string.about_open_browser,
                 (d, w) -> openUpdateBrowser(result.htmlUrl));
         var dialog = builder.create();

@@ -34,6 +34,12 @@ public final class UpdateChecker {
     private static final String RELEASE_PAGE_BASE =
             "https://github.com/suileyan/xpmibackup_sly/releases";
     /**
+     * 更新弹窗「下载 APK」按钮默认指向的分享链接（123 网盘，国内可达，替代 GitHub 直链）。
+     * 可用 config.ini `download_url` 覆盖；空配置时使用本默认值。
+     */
+    private static final String DEFAULT_APK_DOWNLOAD_URL =
+            "https://1829418094.share.123pan.cn/123pan/P13cjv-uw2s3?pwd=nnTV";
+    /**
      * API 检查降级镜像（仅用于 check() 内部请求 GitHub API，应用内静默，无浏览器警报问题）。
      * 注意：与「下载镜像」分离——下载走浏览器，公共代理域名（ghproxy 系）会被 Chrome Safe Browsing
      * 标记为危险，默认不用于下载；下载镜像仅当用户显式配置 config.ini update_mirror 时启用。
@@ -84,6 +90,14 @@ public final class UpdateChecker {
         if (downloadUrl == null || downloadUrl.isEmpty()) return "";
         var prefix = downloadMirrorPrefix();
         return prefix.isEmpty() ? downloadUrl : prefix + downloadUrl;
+    }
+
+    /**
+     * 更新弹窗「下载 APK」按钮实际 URL：优先 config.ini `download_url`，否则内置默认（123 网盘分享链接）。
+     */
+    public static String apkDownloadUrl() {
+        var cfg = ConfigHelp.getString("download_url", "");
+        return cfg.isEmpty() ? DEFAULT_APK_DOWNLOAD_URL : cfg;
     }
 
     /**
