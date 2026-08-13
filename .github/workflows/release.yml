@@ -1,6 +1,9 @@
 name: Build Release APK
 
-# 触发：推送 v* tag（如 v0.1.0）自动构建正式版并发布 Releases；
+# 触发：推送 v* tag 自动构建并发布 Releases。
+#   - vX.Y.Z（如 v0.9.0）→ 正式版（Latest 标识）
+#   - vX.Y.Z-后缀（如 v0.9.0-beta.1 / v0.9.0-rc.2）→ 预发布版（自动标记 prerelease，
+#     不占 Latest；GitHub releases/latest 接口不返回 pre-release，正式版用户不会收到 beta 更新提示）
 # workflow_dispatch 可手动触发（仅构建并上传 artifact，不发布）
 on:
   push:
@@ -54,17 +57,22 @@ jobs:
             echo "::warning::KEYSTORE_BASE64 secret not set - building UNSIGNED release APK"
           fi
 
-      # 从 tag 自动同步版本号：v0.2.1 → versionName "0.2.1"，versionCode 201（主*10000+次*100+补丁）。
+      # 从 tag 自动同步版本号：
+      #   v0.2.1         → versionName "0.2.1"、versionCode 201（主*10000+次*100+补丁）
+      #   v0.2.1-beta.1  → versionName "0.2.1-beta.1"、versionCode 201（pre-release 与目标正式版共享 versionCode，
+      #                     测试用户升级正式版时同版本号可覆盖安装，无需卸载；若系统拒绝则卸载重装）
       # 仅 tag 触发时执行；workflow_dispatch 手动触发时沿用仓库内版本号。
       - name: Sync version from tag
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Tag format must be vX.Y.Z (got: $GITHUB_REF_NAME)"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
+            echo "::error::Tag format must be vX.Y.Z or vX.Y.Z-pre (got: $GITHUB_REF_NAME)"
             exit 1
           fi
-          MAJOR="${VERSION%%.*}"; REST="${VERSION#*.}"; MINOR="${REST%%.*}"; PATCH="${REST#*.}"
+          # 切掉 pre-release 后缀取纯数字核心（0.9.0-beta.1 → 0.9.0）用于 versionCode 计算
+          CORE="${VERSION%%[-]*}"
+          MAJOR="${CORE%%.*}"; REST="${CORE#*.}"; MINOR="${REST%%.*}"; PATCH="${REST#*.}"
           VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
           sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" src/app/build.gradle
           sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" src/app/build.gradle
@@ -116,5 +124,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: src/app/build/outputs/apk/release/*.apk
+          # tag 含 "-"（如 v0.9.0-beta.1）→ pre-release；正式版（vX.Y.Z）→ 普通 Release
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           fail_on_unmatched_files: true
