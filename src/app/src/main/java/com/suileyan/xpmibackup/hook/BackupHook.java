@@ -11,6 +11,7 @@ import android.view.View;
 import com.suileyan.comm.CloudFileHelp;
 import com.suileyan.comm.LogHelp;
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import java.lang.reflect.Field;
@@ -88,10 +89,16 @@ public class BackupHook {
 
     /**
      * Hook NAS进度列表适配器，让当前备份项开始时滚动到对应位置
+     * Android 9~17 版本兼容（HIGH-25）：NASTransferAdapter 类名可能随版本混淆，
+     * 找不到时整段降级（仅影响进度列表自动滚动，不影响备份主流程）
      */
     private void hookNasTransferAdapterScroll(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            var adapterClass = XposedHelpers.findClass("com.miui.backup.adapter.NASTransferAdapter", lpparam.classLoader);
+            var adapterClass = HookCompat.findClassAny(lpparam.classLoader, "BackupHook", "NAS 传输适配器",
+                    "com.miui.backup.adapter.NASTransferAdapter");
+            if (adapterClass == null) {
+                return;
+            }
             var recyclerViewClass = XposedHelpers.findClass("androidx.recyclerview.widget.RecyclerView", lpparam.classLoader);
             hookRecyclerViewSetAdapter(adapterClass, recyclerViewClass);
             hookNasTransferListener(lpparam);
@@ -128,10 +135,16 @@ public class BackupHook {
 
     /**
      * Hook进度页接收NAS开始事件的公开回调，确保UI线程更新后再尝试滚动当前项
+     * Android 9~17 版本兼容（HIGH-25）：ProgressPageFragmentBase$1 为匿名内部类，
+     * 类名序号随源码结构可能漂移，失败时优雅降级（滚动兜底见 hookAdapterItemStart）
      */
     private void hookNasTransferListener(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            var listenerClass = XposedHelpers.findClass("com.miui.backup.activity.ProgressPageFragmentBase$1", lpparam.classLoader);
+            var listenerClass = HookCompat.findClassAny(lpparam.classLoader, "BackupHook", "进度页监听内部类",
+                    "com.miui.backup.activity.ProgressPageFragmentBase$1");
+            if (listenerClass == null) {
+                return;
+            }
             XposedHelpers.findAndHookMethod(listenerClass, "onItemTaskStart", String.class, Integer.TYPE, new XC_MethodHook() {
                 /**
                  * 原回调会投递UI更新，这里再投递一次滚动，避免刷新和滚动顺序相反
@@ -148,10 +161,22 @@ public class BackupHook {
 
     /**
      * Hook旧版公开itemStart开始事件方法，作为监听回调之外的滚动兜底
+     * Android 9~17 版本兼容（HIGH-25）：itemStart 为业务方法名可能混淆，
+     * 候选链 = 明文 itemStart → 按 (String, int)→void 特征定位（抗混淆）
      */
     private void hookAdapterItemStart(Class<?> adapterClass) {
         try {
-            XposedHelpers.findAndHookMethod(adapterClass, "itemStart", String.class, Integer.TYPE, new XC_MethodHook() {
+            if (adapterClass == null) {
+                return;
+            }
+            var m = XposedHelpers.findMethodExactIfExists(adapterClass, "itemStart", String.class, Integer.TYPE);
+            if (m == null) {
+                m = HookCompat.findMethodByParams(adapterClass, Void.TYPE, String.class, Integer.TYPE);
+            }
+            if (m == null) {
+                return;
+            }
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
                 /**
                  * 原方法更新状态后滚动到当前任务位置
                  */
@@ -278,11 +303,28 @@ public class BackupHook {
 
     /**
      * 只替换连接断开导致的暂停通知，保留其它备份通知
+     * Android 9~17 版本兼容（HIGH-25）：NotificationUtils.d 为混淆方法名，
+     * 候选链 = 已知混淆名 d → 按 (Context, Class, int)→Notification 特征定位（抗混淆）
      */
     private void hookSuspendNotification(XC_LoadPackage.LoadPackageParam lpparam) {
+        var notificationUtilsClass = HookCompat.findClassAny(lpparam.classLoader, "BackupHook", "通知工具类",
+                "com.miui.backup.NotificationUtils");
+        if (notificationUtilsClass == null) {
+            return;
+        }
+        var m = XposedHelpers.findMethodExactIfExists(notificationUtilsClass, "d",
+                Context.class, Class.class, Integer.TYPE);
+        if (m == null) {
+            m = HookCompat.findMethodByParams(notificationUtilsClass, Notification.class,
+                    Context.class, Class.class, Integer.TYPE);
+        }
+        if (m == null) {
+            logError("BackupHook: suspend notification 方法未找到（版本结构漂移？）", new IllegalStateException(
+                    "NotificationUtils methods=" + java.util.Arrays.toString(notificationUtilsClass.getDeclaredMethods())));
+            return;
+        }
         try {
-            var notificationUtilsClass = XposedHelpers.findClass("com.miui.backup.NotificationUtils", lpparam.classLoader);
-            XposedHelpers.findAndHookMethod(notificationUtilsClass, "d", Context.class, Class.class, Integer.TYPE, new XC_MethodHook() {
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
                 /**
                  * 连接断开的暂停通知会误导用户，这里换回当前进度通知
                  */
@@ -399,7 +441,12 @@ public class BackupHook {
      */
     private void hookStubAbortMethods(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            var stubClass = XposedHelpers.findClass("com.miui.backup.nas.NASTransferService$NASTransferServiceStub", lpparam.classLoader);
+            // Android 9~17 版本兼容（HIGH-25）：Stub 类名可能混淆，findClassAny 优雅降级
+            var stubClass = HookCompat.findClassAny(lpparam.classLoader, "BackupHook", "NAS 传输服务 Stub",
+                    "com.miui.backup.nas.NASTransferService$NASTransferServiceStub");
+            if (stubClass == null) {
+                return;
+            }
             hookNoArgMethod(stubClass, "abortNASTask");
             hookNoArgMethod(stubClass, "stopNasTransferTask");
         } catch (Throwable e) {
@@ -429,7 +476,19 @@ public class BackupHook {
      */
     private static Notification buildCurrentProgressNotification(Class<?> notificationUtilsClass, Context context, Class<?> targetClass) {
         try {
-            return (Notification) XposedHelpers.callStaticMethod(notificationUtilsClass, "e", context, targetClass);
+            // Android 9~17 版本兼容（HIGH-25）：NotificationUtils.e 为混淆方法名，
+            // 候选链 = 已知混淆名 e → 按 (Context, Class)→Notification 特征定位（抗混淆）
+            var m = XposedHelpers.findMethodExactIfExists(notificationUtilsClass, "e", Context.class, Class.class);
+            if (m == null) {
+                m = HookCompat.findMethodByParams(notificationUtilsClass, Notification.class, Context.class, Class.class);
+            }
+            if (m == null) {
+                logError("BackupHook: build progress notification 方法未找到（版本结构漂移？）", new IllegalStateException(
+                        "NotificationUtils methods=" + java.util.Arrays.toString(notificationUtilsClass.getDeclaredMethods())));
+                return new Notification.Builder(context).setSmallIcon(android.R.drawable.stat_sys_upload_done).build();
+            }
+            m.setAccessible(true);
+            return (Notification) m.invoke(null, context, targetClass);
         } catch (Throwable e) {
             logError("BackupHook: build current progress notification failed", e);
             return new Notification.Builder(context).setSmallIcon(android.R.drawable.stat_sys_upload_done).build();
@@ -542,7 +601,12 @@ public class BackupHook {
      * 根据DFS任务ID从NASBackupDataCenter中找到对应的TaskItem
      */
     private static Object findTaskItem(ClassLoader classLoader, String taskId) throws Exception {
-        var dataCenterClass = XposedHelpers.findClass("com.miui.backup.nas.NASBackupDataCenter", classLoader);
+        // Android 9~17 版本兼容（HIGH-25）：数据中心组类名可能混淆，findClassAny 优雅降级
+        var dataCenterClass = HookCompat.findClassAny(classLoader, "BackupHook", "NAS 数据中心组",
+                "com.miui.backup.nas.NASBackupDataCenter");
+        if (dataCenterClass == null) {
+            return null;
+        }
         var dataCenter = getDataCenterInstance(dataCenterClass);
         if (dataCenter == null) {
             return null;

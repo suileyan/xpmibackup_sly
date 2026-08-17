@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 17+ 本地网络保护：targetSdk 37 默认阻止局域网访问，需显式声明（HIGH-23）
+         注意：SMB/WebDAV 实际网络请求运行在 com.miui.backup 宿主进程，
+         模块声明仅覆盖模块自身（MainActivity 连通性测试等），宿主侧依赖小米备份 APK 自身声明 -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <!-- legacy 存储权限在 API 33+ 已由分区存储取代，限定到 API 32 避免冗余请求（HIGH-22） -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"

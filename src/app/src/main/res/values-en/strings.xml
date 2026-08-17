@@ -62,6 +62,7 @@
     <string name="smb_err_share_no_permission">Share folder exists but access is denied. Make sure your account has read access</string>
     <string name="smb_err_rejected">SMB server rejected the request. Check the server configuration</string>
     <string name="smb_err_connect">SMB connection failed. Check server address, port, account credentials and network</string>
+    <string name="smb_err_localnet">SMB connection failed: the target is a local network address and Android 17+ may block local network access. Grant the "Nearby devices" (local network) permission to "Mi Backup" in system settings</string>
 
     <string name="backup_method">Backup method</string>
     <string name="backup_method_nas">NAS backup</string>

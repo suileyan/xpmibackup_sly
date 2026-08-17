@@ -69,8 +69,9 @@
             android:visibility="gone" />
     </FrameLayout>
 
-    <!-- 底部Tab栏：LSPosed 风格胶囊选中态 -->
+    <!-- 底部Tab栏：LSPosed 风格胶囊选中态（Android 15+ edge-to-edge 强制，需处理导航栏 insets，见 MainActivity.applyEdgeToEdgeInsets） -->
     <LinearLayout
+        android:id="@+id/tab_bar_container"
         android:layout_width="match_parent"
         android:layout_height="64dp"
         android:background="@color/surface"

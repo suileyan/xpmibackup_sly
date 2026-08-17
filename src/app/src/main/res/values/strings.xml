@@ -123,6 +123,7 @@
     <string name="smb_err_share_no_permission">共享文件夹存在但无访问权限，请确认账号对该共享目录有读取权限</string>
     <string name="smb_err_rejected">SMB 服务器拒绝了访问请求，请检查服务器配置</string>
     <string name="smb_err_connect">SMB 连接失败，请检查服务器地址、端口、账号密码与网络</string>
+    <string name="smb_err_localnet">SMB 连接失败：目标为局域网地址，Android 17+ 可能阻止了本地网络访问。请确认系统设置中已为「小米备份」授予本地网络权限（应用信息 → 权限 → 附近设备）</string>
 
     <string name="backup_method">备份方式</string>
     <string name="backup_method_nas">NAS 备份</string>

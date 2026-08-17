@@ -1,6 +1,6 @@
 # MiBackup_sly - 小米云备份助手
 
-![Android](https://img.shields.io/badge/Android-9.0+-blue)
+![Android](https://img.shields.io/badge/Android-9.0%E2%80%9317-blue)
 
 ![LSPosed](https://img.shields.io/badge/LSPosed-supported-green)
 
@@ -37,13 +37,19 @@
 - 网盘 Token 自动刷新：光鸭 OAuth2 refresh_token 自动轮换；夸克 __puus 会话自动续期，401 自动重试；天翼 refreshToken 自动轮换 + accessToken 过期自愈
 - 大文件在 Cloud 层统一切片上传，十一种协议共用同一套切片逻辑
 - 自动清理超出数量限制的旧备份
+- Android 9~17 全版本适配：edge-to-edge（含底部导航栏 insets）、Android 17 本地网络保护（SMB/WebDAV 专项提示）、static final 反射限制审计、配置变更行为兼容
+- Hook 跨版本兼容（HIGH-25）：小米备份类名/混淆方法名漂移时多候选自动降级 + 诊断日志，DFS AIDL transact code 漂移可观测
 - 顶部「备份」按钮点击进入智能存储备份页，长按进入备份升级页
 
 ## 环境要求
 
-- Android 9.0+（minSdk 28）
+- Android 9.0 ~ 17（minSdk 28 / targetSdk 37，含 Android 17 本地网络保护与 edge-to-edge 适配）
 - 已安装 Xposed 框架（LSPatch / LSPosed / EdXposed 等）
 - 支持的 Xposed 作用域：`com.android.settings`、`com.miui.backup`
+
+> **Android 17 本地网络说明**：SMB/WebDAV 局域网通道的实际网络请求运行在 `com.miui.backup` 宿主进程，
+> 其是否受 Android 17 本地网络保护（ACCESS_LOCAL_NETWORK）影响取决于小米备份 App 自身声明；
+> 模块已声明该权限并在 SMB 连接失败且目标为局域网时给出专项提示（ERR_SMB_LOCALNET）。
 
 ## 架构设计
 

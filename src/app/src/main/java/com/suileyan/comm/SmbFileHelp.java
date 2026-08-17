@@ -15,9 +15,12 @@ import com.hierynomus.smbj.share.DiskShare;
 import com.suileyan.cloud.ProgressCallback;
 import com.suileyan.cloud.RemoteEntry;
 
+import android.os.Build;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileInputStream;
+import java.net.InetAddress;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -61,7 +64,31 @@ public class SmbFileHelp {
                 // 只记录服务器/端口/共享名，密码与用户名绝不落日志
                 LogHelp.e(TAG, "SMB connect failed: " + server + ":" + port + " share=" + shareName, e);
                 // 附稳定错误码（ERR_SMB_*），供 UI 层映射为本地化提示（共享不存在/无权限等）
-                throw new RuntimeException("SMB connect failed: " + smbErrorCode(e), e);
+                var code = smbErrorCode(e);
+                // Android 17+ 本地网络保护（HIGH-23）：targetSdk 37 进程默认阻止局域网访问。
+                // 连接类失败 + 局域网地址时升级为专项错误码，UI 层提示可能被系统拦截（避免误报用"可能"措辞）
+                // 注意：错误码仅含字母数字（UI 层按 isLetterOrDigit 截取），不得带下划线
+                if ("ERR_SMB_CONNECT".equals(code) && isLocalNetworkBlockPossible(server)) {
+                    code = "ERR_SMB_LOCALNET";
+                }
+                throw new RuntimeException("SMB connect failed: " + code, e);
+            }
+        }
+
+        /**
+         * Android 17+ 本地网络保护检测（HIGH-23）：
+         * 仅当 ① 系统为 Android 17+ 且 ② 目标是局域网/环回地址时返回 true。
+         * 不做权限强校验（宿主进程权限由小米备份 APK 决定，无法可靠读取），
+         * 由 UI 层以"可能"措辞提示，避免服务器真实宕机时误导。
+         */
+        private static boolean isLocalNetworkBlockPossible(String server) {
+            if (Build.VERSION.SDK_INT < 37) return false;
+            try {
+                var addr = InetAddress.getByName(server);
+                return addr.isSiteLocalAddress() || addr.isLoopbackAddress();
+            } catch (Exception e) {
+                // 主机名解析失败（DNS 异常等）不判定为本地网络受限，避免误报
+                return false;
             }
         }
 

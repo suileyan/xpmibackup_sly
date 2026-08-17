@@ -420,6 +420,8 @@ public class ServiceConfigFragment extends Fragment {
                 return getString(R.string.smb_err_rejected);
             case "ERR_SMB_CONNECT":
                 return getString(R.string.smb_err_connect);
+            case "ERR_SMB_LOCALNET":
+                return getString(R.string.smb_err_localnet);
             default:
                 return "";
         }

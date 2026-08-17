@@ -174,7 +174,12 @@ public class AutoBackupHook {
      */
     private void hookStationPackageCheck(XC_LoadPackage.LoadPackageParam lpparam, String methodName) {
         try {
-            var clazz = XposedHelpers.findClass("com.miui.backup.utils.AppUtils", lpparam.classLoader);
+            // Android 9~17 版本兼容（HIGH-25）：AppUtils 类名/方法名可能混淆，findClassAny 优雅降级
+            var clazz = HookCompat.findClassAny(lpparam.classLoader, "AutoBackupHook", "工具类",
+                    "com.miui.backup.utils.AppUtils");
+            if (clazz == null) {
+                return;
+            }
             if (XposedHelpers.findMethodExactIfExists(clazz, methodName, Context.class, String.class) == null) {
                 return;
             }
@@ -200,7 +205,12 @@ public class AutoBackupHook {
      */
     private void hookNasAutoBackupReschedule(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            var clazz = XposedHelpers.findClass(AUTO_BACKUP_SERVICE_CLASS, lpparam.classLoader);
+            // Android 9~17 版本兼容（HIGH-25）：AutoBackupService 类名可能混淆，findClassAny 优雅降级
+            var clazz = HookCompat.findClassAny(lpparam.classLoader, "AutoBackupHook", "自动备份服务",
+                    AUTO_BACKUP_SERVICE_CLASS);
+            if (clazz == null) {
+                return;
+            }
             XposedHelpers.findAndHookMethod(clazz, "onStartJob", JobParameters.class, new XC_MethodHook() {
                 /**
                  * 原生 JobService 返回后，根据当前配置安排下一次 NAS 自动备份
@@ -224,7 +234,12 @@ public class AutoBackupHook {
      */
     private void hookMoreSettingsNasAutoBackup(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            var clazz = XposedHelpers.findClass("com.miui.backup.settings.MoreSettingsFragment", lpparam.classLoader);
+            // Android 9~17 版本兼容（HIGH-25）：MoreSettingsFragment 类名可能混淆，findClassAny 优雅降级
+            var clazz = HookCompat.findClassAny(lpparam.classLoader, "AutoBackupHook", "更多设置页",
+                    "com.miui.backup.settings.MoreSettingsFragment");
+            if (clazz == null) {
+                return;
+            }
             XposedHelpers.findAndHookMethod(clazz, "onCreatePreferences", Bundle.class, String.class, new XC_MethodHook() {
                 /**
                  * 原生设置加载完成后追加 NAS 自动备份分组

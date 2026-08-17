@@ -105,6 +105,10 @@ public class MainActivity extends Activity {
             spacer.getLayoutParams().height = getResources().getDimensionPixelSize(statusBarRes);
         }
 
+        // Android 15+ 强制 edge-to-edge（targetSdk 35+，Android 9~17 适配 HIGH-24）：
+        // 窗口默认延伸至系统栏区域，底部 Tab 栏需按导航栏 inset 补 padding，避免被手势条/三键导航遮挡
+        applyEdgeToEdgeInsets();
+
         // 检查文件管理权限，未授权则跳转系统设置页面
         if (!Environment.isExternalStorageManager()) {
             var intent = new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
@@ -220,6 +224,31 @@ public class MainActivity extends Activity {
             }
         } catch (Exception e) {
             com.suileyan.comm.LogHelp.w("XpMiBackup", "apply theme failed", e);
+        }
+    }
+
+    /**
+     * edge-to-edge 底部适配（Android 15+ 强制，HIGH-24）：
+     * targetSdk 35+ 窗口默认延伸至导航栏区域，底部 Tab 栏需按导航栏 inset 补 padding，
+     * 避免被手势条/三键导航遮挡。API 30+ 用 WindowInsets.Type.navigationBars()；
+     * Tab 栏背景（surface 色）随窗口延伸至导航栏，内容安全避开。
+     * API 29 及以下无强制 edge-to-edge，直接跳过。
+     */
+    private void applyEdgeToEdgeInsets() {
+        if (Build.VERSION.SDK_INT < 30) return;
+        try {
+            var tabBar = findViewById(R.id.tab_bar_container);
+            tabBar.setOnApplyWindowInsetsListener((v, insets) -> {
+                var bottom = insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom;
+                if (bottom > 0) {
+                    v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(),
+                            v.getPaddingBottom() + bottom);
+                }
+                return insets;
+            });
+            tabBar.requestApplyInsets();
+        } catch (Throwable e) {
+            com.suileyan.comm.LogHelp.w("XpMiBackup", "apply edge-to-edge insets failed", e);
         }
     }
 

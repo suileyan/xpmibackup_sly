@@ -230,6 +230,11 @@ public class AIDLHook {
                                 case 22:
                                     param.setResult(true);
                                     break;
+                                default:
+                                    // Android 9~17 版本兼容（HIGH-25）：未知 transact code 不短路（交回系统），
+                                    // 节流记录一次，供真机版本矩阵发现 DFS AIDL 接口漂移
+                                    logUnknownDfsCode(binder, code);
+                                    break;
                             }
                         }
                     } catch (Exception e) {
@@ -239,6 +244,22 @@ public class AIDLHook {
             }});
         } catch (Throwable e) {
             logError("AIDLHook: hook BinderProxy.transact failed", e);
+        }
+    }
+
+    /**
+     * 记录未知 DFS transact code（HIGH-25 版本兼容诊断）。
+     * 同一 code 进程生命周期内只记一次，避免 one-way 高频事务刷爆日志。
+     * 新版本小米备份 DFS AIDL 若新增接口方法，此处出现未知 code 即为漂移信号。
+     */
+    private static final java.util.Set<Integer> REPORTED_UNKNOWN_DFS_CODES =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<Integer>());
+
+    private static void logUnknownDfsCode(IBinder binder, int code) {
+        if (REPORTED_UNKNOWN_DFS_CODES.add(code)) {
+            LogHelp.w(TAG, "DFS unknown transact code=" + code
+                    + " binder=" + binder.getClass().getName()
+                    + "（未短路，交回系统处理；如为 DFS 新接口请收集上报）");
         }
     }
 
@@ -877,6 +898,20 @@ public class AIDLHook {
     }
 
     /**
+     * DFS SDK 模型类查找（Android 9~17 版本兼容，HIGH-25）：
+     * 包名/类名随小米备份 App 版本可能漂移，findClassAny 优雅降级——找不到时抛异常
+     * 由上层 catch 记录诊断日志（模型类缺失属于致命结构变化，无降级路径）
+     */
+    private static Class<?> dfsModelClass(XC_LoadPackage.LoadPackageParam lpparam, String simpleName) throws Exception {
+        var clazz = HookCompat.findClassAny(lpparam.classLoader, "AIDLHook", "DFS 模型类 " + simpleName,
+                "com.xiaomi.dist.file.client.common.model." + simpleName);
+        if (clazz == null) {
+            throw new IllegalStateException("DFS model class not found: " + simpleName);
+        }
+        return clazz;
+    }
+
+    /**
      * 使用目标应用类加载器构造SmbFileBatchResult
      */
     private Parcelable createSmbFileBatchResult(List<RemoteEntry> entries, String aidlDir, XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
@@ -884,7 +919,7 @@ public class AIDLHook {
         for (var entry : entries) {
             smbFiles.add(createSmbFile(entry, aidlDir, lpparam));
         }
-        var clazz = XposedHelpers.findClass("com.xiaomi.dist.file.client.common.model.SmbFileBatchResult", lpparam.classLoader);
+        var clazz = dfsModelClass(lpparam, "SmbFileBatchResult");
         var parcel = Parcel.obtain();
         try {
             parcel.writeInt(1);
@@ -901,7 +936,7 @@ public class AIDLHook {
      * 使用Parcel构造小米SDK里的SmbFile对象
      */
     private Parcelable createSmbFile(RemoteEntry entry, String aidlDir, XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
-        var clazz = XposedHelpers.findClass("com.xiaomi.dist.file.client.common.model.SmbFile", lpparam.classLoader);
+        var clazz = dfsModelClass(lpparam, "SmbFile");
         var parcel = Parcel.obtain();
         try {
             var now = System.currentTimeMillis();
@@ -930,7 +965,7 @@ public class AIDLHook {
      * 构造模拟设备信息，保持设备ID和页面入口传参一致
      */
     private Parcelable createDeviceInfo(XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
-        var clazz = XposedHelpers.findClass("com.xiaomi.dist.file.client.common.model.DeviceInfo", lpparam.classLoader);
+        var clazz = dfsModelClass(lpparam, "DeviceInfo");
         var parcel = Parcel.obtain();
         try {
             parcel.writeString(ConfigHelp.getString("device_id", "miback"));
@@ -949,7 +984,7 @@ public class AIDLHook {
      * 构造共享路径信息，供备份页面展示远端空间
      */
     private static Parcelable createPathInfo(XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
-        var clazz = XposedHelpers.findClass("com.xiaomi.dist.file.client.common.model.PathInfo", lpparam.classLoader);
+        var clazz = dfsModelClass(lpparam, "PathInfo");
         var parcel = Parcel.obtain();
         try {
             parcel.writeInt(1);
@@ -1151,7 +1186,12 @@ public class AIDLHook {
      */
     private void ensureDfsServiceReady(String deviceId, XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            var serviceClass = XposedHelpers.findClass("com.miui.backup.dfs.DistFileClientService", lpparam.classLoader);
+            // Android 9~17 版本兼容（HIGH-25）：DFS 服务类名随 MIUI 版本可能混淆，findClassAny 优雅降级
+            var serviceClass = HookCompat.findClassAny(lpparam.classLoader, "AIDLHook", "DFS 服务类",
+                    "com.miui.backup.dfs.DistFileClientService");
+            if (serviceClass == null) {
+                return;
+            }
             var instance = getDfsServiceInstance(serviceClass);
             if (instance == null) {
                 LogHelp.e(TAG, "ensureDfsServiceReady failed: DistFileClientService instance is null");
@@ -1174,7 +1214,12 @@ public class AIDLHook {
      */
     private void keepDfsConnected(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            var serviceClass = XposedHelpers.findClass("com.miui.backup.dfs.DistFileClientService", lpparam.classLoader);
+            // Android 9~17 版本兼容（HIGH-25）：DFS 服务类名随 MIUI 版本可能混淆，findClassAny 优雅降级
+            var serviceClass = HookCompat.findClassAny(lpparam.classLoader, "AIDLHook", "DFS 服务类",
+                    "com.miui.backup.dfs.DistFileClientService");
+            if (serviceClass == null) {
+                return;
+            }
             var instance = getDfsServiceInstance(serviceClass);
             if (instance != null) {
                 keepDfsConnected(serviceClass, instance);
@@ -1239,7 +1284,11 @@ public class AIDLHook {
         if (field.get(instance) != null) {
             return;
         }
-        var implClass = XposedHelpers.findClass("com.xiaomi.dist.file.client.kit.manager.DistFileClientImpl", lpparam.classLoader);
+        var implClass = HookCompat.findClassAny(lpparam.classLoader, "AIDLHook", "DFS 客户端实现",
+                "com.xiaomi.dist.file.client.kit.manager.DistFileClientImpl");
+        if (implClass == null) {
+            return;
+        }
         var constructor = implClass.getConstructor(String.class);
         field.set(instance, constructor.newInstance(deviceId));
     }
