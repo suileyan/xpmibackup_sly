@@ -19,6 +19,13 @@ import re
 import sys
 import urllib.request
 
+# Windows 控制台默认 GBK，脚本末尾的中文/符号输出会 UnicodeEncodeError 直接中断，
+# 让「23 项全 PASS」看起来像失败。统一转 UTF-8 并容错。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # 本机回环不走系统代理（用户环境配置了 http_proxy，会把 127.0.0.1 打到代理上返回 502）
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 

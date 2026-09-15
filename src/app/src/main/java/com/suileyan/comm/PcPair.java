@@ -114,7 +114,14 @@ public final class PcPair {
     private static String readAll(HttpURLConnection conn) throws Exception {
         try (var in = conn.getResponseCode() < 400 ? conn.getInputStream() : conn.getErrorStream()) {
             if (in == null) return "";
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            // InputStream.readAllBytes() 需 API 33，Android 11/12 会 NoSuchMethodError（配对待确认流程不能崩）
+            var buf = new java.io.ByteArrayOutputStream();
+            var chunk = new byte[4096];
+            int n;
+            while ((n = in.read(chunk)) > 0) {
+                buf.write(chunk, 0, n);
+            }
+            return new String(buf.toByteArray(), StandardCharsets.UTF_8);
         }
     }
 

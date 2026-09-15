@@ -25,7 +25,14 @@
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
         android:allowBackup="false"
+        android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true">
+        <!-- usesCleartextTraffic（HIGH-25）：targetSdk ≥ 28 默认禁止明文 HTTP，
+             而「备份至 PC」的局域网通道必然是 http://192.168.x.x:8321（配对 +
+             WebDAV），自建 NAS/WebDAV 也多是 http。默认策略下 127.0.0.1 被放行、
+             局域网地址被拦 —— 症状正是「USB 能用、局域网永远连不上」，
+             且报错只落在日志里（Cleartext HTTP traffic to 192.168.x.x not permitted）。
+             云盘等公网接口均为 https，放开明文不影响其安全性。 -->
 
         <!-- 主页 -->
         <activity

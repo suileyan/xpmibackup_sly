@@ -181,6 +181,9 @@ public class MainActivity extends Activity {
             return;
         }
 
+        // Android 16+ 本地网络保护：局域网发现/连接的前置权限
+        ensureLocalNetworkPermission();
+
         initTabs();
         com.suileyan.comm.LogHelp.i("XpMiBackup", "STARTUP initTabs done: " + (System.currentTimeMillis() - startupT0) + "ms");
         // 高亮当前 Tab（主题切换重建后恢复上次位置，不强制回设备配置页）
@@ -207,6 +210,39 @@ public class MainActivity extends Activity {
         // 首次启动免责声明（3 秒倒计时后才能点同意）
         maybeShowDisclaimer();
         LogHelp.i("XpMiBackup", "STARTUP step: onCreate END");
+    }
+
+    /** 本地网络权限申请码 */
+    private static final int REQ_LOCAL_NETWORK = 0x4C4E; // "LN"
+
+    /**
+     * Android 16（API 36）本地网络保护（LNP）：targetSdk ≥ 36 时，应用访问局域网
+     * （UDP 广播/单播、192.168/10/172.16 网段的 HTTP）必须先持有
+     * ACCESS_LOCAL_NETWORK，否则发包/收包在系统侧被直接拦掉。
+     *
+     * 症状特别隐蔽：127.0.0.1 回环不受限（所以 USB 通道 adb reverse 一直能用），
+     * 局域网地址却被拦，且拦截不抛异常 —— 「备份至 PC」的 UDP 发现会静默 0 应答，
+     * HTTP 兜底探测也静默失败。此处补上运行时申请（清单里早已声明）。
+     */
+    private void ensureLocalNetworkPermission() {
+        if (Build.VERSION.SDK_INT < 36) return; // 仅 Android 16+ 存在该权限
+        var perm = "android.permission.ACCESS_LOCAL_NETWORK";
+        if (checkSelfPermission(perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+        LogHelp.w("XpMiBackup", "本地网络权限未授予：局域网扫描/连接会被系统拦截，正在申请");
+        requestPermissions(new String[]{perm}, REQ_LOCAL_NETWORK);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != REQ_LOCAL_NETWORK) return;
+        var granted = results.length > 0 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (granted) {
+            LogHelp.i("XpMiBackup", "本地网络权限已授予，局域网发现可用");
+        } else {
+            LogHelp.w("XpMiBackup", "本地网络权限被拒：备份至 PC 只能走 USB 通道，"
+                    + "如需局域网请到「设置 → 应用 → 权限」授予「本地网络」");
+        }
     }
 
     /** 首次启动免责声明：不可取消，同意按钮 3 秒倒计时后可点 */

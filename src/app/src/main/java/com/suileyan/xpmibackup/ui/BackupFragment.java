@@ -71,6 +71,7 @@ public class BackupFragment extends Fragment {
     private long pcLastScanAt;
     private AlertDialog pcPairingDialog;
     private final AtomicBoolean pcPairCancel = new AtomicBoolean(false);
+    private long pcCredCheckAt; // 上次凭据验证时间戳，避免每轮扫描都检测
 
     /**
      * 初始化界面：绑定备份方式选择与开始备份按钮
@@ -217,7 +218,7 @@ public class BackupFragment extends Fragment {
         autoScanPc();
     }
 
-    /** 扫描结果落地：已配对电脑在场 → 静默刷新状态；否则对未忽略的电脑弹连接询问 */
+    /** 扫描结果落地：已配对电脑在场 → 验证凭据有效性 → 静默刷新状态；否则对未忽略的电脑弹连接询问 */
     private void handlePcFound(List<PcDiscovery.PcInfo> found) {
         pcFound = found;
         if (found.isEmpty()) {
@@ -228,6 +229,11 @@ public class BackupFragment extends Fragment {
         for (var f : found) {
             if ((f.host + ":" + f.port).equals(pairedAddr)) {
                 updatePcStatusText(f); // 已配对的电脑在场，静默确认在线
+                // 每 60s 验证一次凭据有效性；401 时自动清除配对，触发重新配对
+                if (System.currentTimeMillis() - pcCredCheckAt > 60_000) {
+                    pcCredCheckAt = System.currentTimeMillis();
+                    verifyPcCredOrRePair(f);
+                }
                 return;
             }
         }
@@ -239,6 +245,49 @@ public class BackupFragment extends Fragment {
             return;
         }
         updatePcStatusText(found.get(0));
+    }
+
+    /** 后台验证已配对 PC 的 WebDAV 凭据；401 时清除配对状态并触发重新配对 */
+    private void verifyPcCredOrRePair(PcDiscovery.PcInfo pc) {
+        com.suileyan.comm.Async.run("pc-cred-check", () -> {
+            var profile = findPcProfile();
+            if (profile == null) return;
+            var pass = com.suileyan.cloud.EncryptedCredStore.get(profile.id, "webdav_pass");
+            var params = new java.util.LinkedHashMap<>(profile.params);
+            params.put("webdav_pass", pass != null ? pass : "");
+            try {
+                var ok = com.suileyan.comm.ConfigHelp.withAccount(params,
+                        (java.util.concurrent.Callable<Boolean>) com.suileyan.comm.WebdavFileHelp::testConnection);
+                if (Boolean.TRUE.equals(ok)) return;
+            } catch (Exception ignored) {
+            }
+            // 凭据失效：清除配对状态
+            com.suileyan.comm.LogHelp.w("XpMiBackup", "PC 凭据已失效（401），清除配对状态以触发重新配对");
+            clearPcPairing();
+            var activity = getActivity();
+            if (activity == null || !isAdded()) return;
+            activity.runOnUiThread(() -> {
+                updatePcOption();
+                updatePcStatusText(null);
+                // 重新扫描，下一轮 handlePcFound 会走新 PC 分支弹连接询问
+                forceRescanPc();
+            });
+        });
+    }
+
+    /** 清除 PC 配对信息（config.ini + profile + 凭据） */
+    private void clearPcPairing() {
+        try {
+            var cfg = ConfigHelp.load();
+            cfg.put("pc_paired_addr", "");
+            cfg.put("pc_paired_name", "");
+            ConfigHelp.save(cfg);
+        } catch (Exception ignored) {
+        }
+        var profile = findPcProfile();
+        if (profile != null) {
+            ProfileStore.remove(profile.id);
+        }
     }
 
     /** 发现未配对电脑：弹窗询问是否连接（忽略则本会话不再弹） */

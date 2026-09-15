@@ -5,11 +5,14 @@
 //
 // 连接流程（手机端无需手动配置）：
 //
-//	发现：手机备份页自动探测 —— 局域网走 UDP 8322 广播应答，
+//	发现：手机备份页自动探测 —— 局域网走 UDP 8322 广播应答
+//	      （PC 应答 socket 源端口固定 8322，与手机绑定端口对齐；Windows 需放行 UDP 8322 入站）
 //	      USB 走 adb reverse 后探测 http://127.0.0.1:8321/miback/info
 //	配对：手机 POST /pair/requests → 本机弹 Windows 原生确认框
 //	      （或控制页「连接请求」卡片）→ 同意后凭据单次下发
 //	传输：http://<电脑局域网IP>:8321/dav/（USB 为 http://127.0.0.1:8321/dav/）
+//	监控：控制页新增「备份实时状态」卡片，1.5s 轮询 /api/live
+//	      （当前速度 + 在途文件进度 + 本次累计）
 //
 // 协议子集按 src/app/.../comm/WebdavFileHelp.java 的线上行为逐条对齐：
 //
@@ -19,10 +22,12 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,6 +43,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -62,7 +68,11 @@ func configPath() string {
 func loadConfig() *Config {
 	c := &Config{Port: 8321, User: "miback"}
 	if b, err := os.ReadFile(configPath()); err == nil {
-		_ = json.Unmarshal(b, c)
+		// 解析失败必须留痕：曾出现配置文件被写入 BOM 后静默回落默认端口
+		// （表现为「改了配置却没生效」），这里的告警是唯一线索
+		if jerr := json.Unmarshal(b, c); jerr != nil {
+			logf("配置文件 %s 解析失败（%v），已回落默认配置", configPath(), jerr)
+		}
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		c.Port = 8321
@@ -98,6 +108,134 @@ func (c *Config) recordPairedDevice(name string) {
 		c.Pair = c.Pair[len(c.Pair)-8:]
 	}
 	c.save()
+}
+
+// ---------- 实时传输统计（供控制页「备份进度/速度」卡片轮询） ----------
+
+type liveTransfer struct {
+	Path  string `json:"path"`
+	Total int64  `json:"total"` // Content-Length 声明的总字节；0 = 未声明
+	Recv  int64  `json:"recv"`  // 已接收字节
+}
+
+type liveTracker struct {
+	mu           sync.Mutex
+	byConn       map[string]*liveTransfer // key = 连接 RemoteAddr
+	lastSeen     map[string]time.Time     // 30s 无写入视为中断，清理
+	sessionBytes int64
+	sessionFiles int
+	speedWin     *speedWindow // 滚动 3s 字节窗口
+}
+
+var live = newLiveTracker()
+
+// speedWindow：滚动 ~3s 字节窗，UI 1.5s 轮询拿到的速率近似稳定（每满 3s 窗口重开）
+type speedWindow struct {
+	mu    sync.Mutex
+	start time.Time
+	bytes int64
+}
+
+func newSpeedWindow() *speedWindow {
+	return &speedWindow{start: time.Now()}
+}
+
+// add 逐包计入字节；满 3s 窗口自动重开
+func (w *speedWindow) add(n int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if time.Since(w.start) >= 3*time.Second {
+		w.start = time.Now()
+		w.bytes = 0
+	}
+	w.bytes += n
+}
+
+// mbps 最近窗口的平均 MB/s
+func (w *speedWindow) mbps() float64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	age := time.Since(w.start)
+	if age < 200*time.Millisecond { // 刚开窗不出 0，避免闪烁
+		return 0
+	}
+	return float64(w.bytes) / age.Seconds() / 1024 / 1024
+}
+
+func newLiveTracker() *liveTracker {
+	return &liveTracker{byConn: map[string]*liveTransfer{}, lastSeen: map[string]time.Time{}, speedWin: newSpeedWindow()}
+}
+
+// registerPUT 在 PUT 开始时登记一条在途传输（connKey = 连接 RemoteAddr 字符串）
+func (t *liveTracker) registerPUT(connKey, relPath string, contentLength int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.byConn[connKey] = &liveTransfer{Path: relPath, Total: contentLength}
+	t.lastSeen[connKey] = time.Now()
+}
+
+// feedPUT 逐包计入已收字节（放在 davHandler 的写循环里）
+func (t *liveTracker) feedPUT(connKey string, n int) {
+	if n <= 0 {
+		return
+	}
+	t.speedWin.add(int64(n))
+	t.mu.Lock()
+	tf, ok := t.byConn[connKey]
+	if ok {
+		tf.Recv += int64(n)
+	}
+	t.lastSeen[connKey] = time.Now()
+	t.mu.Unlock()
+}
+
+// finishPUT 结束一条在途传输，记入 session 累计
+func (t *liveTracker) finishPUT(connKey string, success bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if success {
+		if tf, ok := t.byConn[connKey]; ok {
+			t.sessionBytes += tf.Recv
+			t.sessionFiles++
+		}
+	}
+	delete(t.byConn, connKey)
+	delete(t.lastSeen, connKey)
+}
+
+// snapshot 返回当前 UI 数据（拷贝后编码）
+func (t *liveTracker) snapshot() map[string]any {
+	t.mu.Lock()
+	active := make([]*liveTransfer, 0, len(t.byConn))
+	var cur *liveTransfer
+	for k, tf := range t.byConn {
+		if last, ok := t.lastSeen[k]; !ok || time.Since(last) >= 30*time.Second {
+			continue
+		}
+		active = append(active, tf)
+		if tf.Recv > 0 && tf.Path != "" && (cur == nil || tf.Recv > cur.Recv) {
+			cur = tf
+		}
+	}
+	bytes, files := t.sessionBytes, t.sessionFiles
+	t.mu.Unlock()
+
+	sort.Slice(active, func(i, j int) bool { return active[i].Path < active[j].Path })
+
+	curOut := map[string]any{"path": "", "recv": 0, "total": 0, "pct": 0}
+	if cur != nil {
+		pct := 0
+		if cur.Total > 0 {
+			pct = int(cur.Recv * 100 / cur.Total)
+		}
+		curOut = map[string]any{"path": cur.Path, "recv": cur.Recv, "total": cur.Total, "pct": pct}
+	}
+	return map[string]any{
+		"speedMBps": t.speedWin.mbps(),
+		"session":   map[string]any{"bytes": bytes, "files": files},
+		"active":    active,
+		"current":   curOut,
+	}
 }
 
 // ---------- 传输日志（环形） ----------
@@ -233,15 +371,19 @@ func davAuth(w http.ResponseWriter, r *http.Request, c *Config) bool {
 	return true
 }
 
-// 记录传输字节数与速度
+// countingWriter 记录传输字节数与速度；带 connKey 时同步上报实时统计（GET 方向）
 type countingWriter struct {
 	http.ResponseWriter
-	n int64
+	n       int64
+	connKey string // 非空时逐块喂入 live tracker（恢复/下载方向）
 }
 
 func (cw *countingWriter) Write(p []byte) (int, error) {
 	n, err := cw.ResponseWriter.Write(p)
 	cw.n += int64(n)
+	if cw.connKey != "" {
+		live.feedPUT(cw.connKey, n)
+	}
 	return n, err
 }
 
@@ -267,6 +409,28 @@ func human(n int64) string {
 		return fmt.Sprintf("%.1f KB", float64(n)/kb)
 	default:
 		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// copyReporting 按块拷贝并在每块写入后上报实时统计（PUT 用；io.Copy 拿不到逐块字节）
+func copyReporting(dst io.Writer, src io.Reader, connKey string) (int64, error) {
+	var total int64
+	buf := make([]byte, 256*1024)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return total, werr
+			}
+			total += int64(n)
+			live.feedPUT(connKey, n)
+		}
+		if rerr == io.EOF {
+			return total, nil
+		}
+		if rerr != nil {
+			return total, rerr
+		}
 	}
 }
 
@@ -345,12 +509,16 @@ func davHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 			http.Error(w, "403 Forbidden", http.StatusForbidden)
 			return
 		}
-		n, copyErr := io.Copy(f, r.Body)
+		// 逐块写入并上报实时统计（/api/live：速度 + 当前文件进度）
+		connKey := r.RemoteAddr
+		live.registerPUT(connKey, rel, r.ContentLength)
+		n, copyErr := copyReporting(f, r.Body, connKey)
 		closeErr := f.Close()
 		if copyErr == nil {
 			copyErr = closeErr
 		}
 		if copyErr != nil {
+			live.finishPUT(connKey, false)
 			_ = os.Remove(tmp)
 			logf("PUT  FAIL %s (%s)", rel, copyErr)
 			http.Error(w, "500 write failed", http.StatusInternalServerError)
@@ -358,10 +526,12 @@ func davHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 		}
 		if err := os.Rename(tmp, local); err != nil {
 			_ = os.Remove(tmp)
+			live.finishPUT(connKey, false)
 			logf("PUT  FAIL %s (%s)", rel, err)
 			http.Error(w, "500 rename failed", http.StatusInternalServerError)
 			return
 		}
+		live.finishPUT(connKey, true)
 		logf("PUT  OK   %s  %s  %s", rel, human(n), speedOf(n, time.Since(start)))
 		w.WriteHeader(http.StatusCreated)
 
@@ -383,8 +553,14 @@ func davHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 			return
 		}
 		cw := &countingWriter{ResponseWriter: w}
+		// 下载（恢复方向）也上报实时统计：登记 + 每写一块 feed（countingWriter.connKey）
+		if r.Method == "GET" {
+			cw.connKey = r.RemoteAddr
+			live.registerPUT(cw.connKey, rel, st.Size())
+		}
 		http.ServeContent(cw, r, st.Name(), st.ModTime(), f)
 		if r.Method == "GET" {
+			live.finishPUT(cw.connKey, true)
 			logf("GET  OK   %s  %s  %s", rel, human(cw.n), speedOf(cw.n, time.Since(start)))
 		}
 
@@ -423,10 +599,11 @@ func dirExists(p string) bool {
 
 // ---------- 自动发现（UDP 广播应答） ----------
 
-const (
-	discoverPort  = 8322
-	discoverMagic = "MIBACKPC_DISCOVER_V1"
-)
+// discoverMagic 手机端探测码（与 PcDiscovery.MAGIC 逐字对齐）
+const discoverMagic = "MIBACKPC_DISCOVER_V1"
+
+// discoverPort 是变量而非常量：单元测试要换端口跑，避免与正在运行的服务抢 8322
+var discoverPort = 8322
 
 func hostName() string {
 	if h, err := os.Hostname(); err == nil && h != "" {
@@ -436,36 +613,296 @@ func hostName() string {
 }
 
 func discoverPayload(c *Config) []byte {
+	// lan / lans：手机拿到后存为 pc_lan_addr / pc_lan_addrs，下次 UDP 单播探测
+	// 可绕过 AP 隔离；lans 是全部候选（物理网卡优先），手机逐个试，虚拟网卡排最后。
+	ips := lanIPs()
+	lan := ""
+	if len(ips) > 0 {
+		lan = ips[0]
+	}
 	b, _ := json.Marshal(map[string]any{
 		"service": "mibackpc",
 		"name":    hostName(),
 		"tcp":     c.Port,
-		"ver":     1,
+		"ver":     2,
+		"lan":     lan,
+		"lans":    ips,
 	})
 	return b
 }
 
-// serveDiscovery 监听 UDP 8322：手机端备份页发广播探测码，本机单播回 JSON。
-// 手机只需发广播 + 收单播应答，无需组播锁等特殊权限。
-func serveDiscovery(c *Config) {
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: discoverPort})
-	if err != nil {
-		logf("自动发现(UDP %d)不可用: %v", discoverPort, err)
-		return
+// ---------- 发现服务运行时状态（控制页展示 + 看守判断） ----------
+
+var discovery struct {
+	mu        sync.Mutex
+	conn      *net.UDPConn
+	ready     bool
+	lastProbe time.Time // 最后一次「真实」（非回环）探测；回环自检不计入
+	peer      string
+	probes    int64
+	rebuilds  int
+	lastErr   string
+}
+
+func discoveryInfo() (ready bool, last time.Time, peer string, probes int64, rebuilds int, lastErr string) {
+	discovery.mu.Lock()
+	defer discovery.mu.Unlock()
+	return discovery.ready, discovery.lastProbe, discovery.peer, discovery.probes, discovery.rebuilds, discovery.lastErr
+}
+
+// discoveryNoteProbe 只登记非回环探测：回环探测来自本机自检，若计入
+// lastProbe，看守会永远认为「刚有探测」，从而失去自检意义。
+func discoveryNoteProbe(ip string) {
+	discovery.mu.Lock()
+	discovery.lastProbe = time.Now()
+	discovery.peer = ip
+	discovery.probes++
+	discovery.mu.Unlock()
+}
+
+func discoveryCurrent() *net.UDPConn {
+	discovery.mu.Lock()
+	defer discovery.mu.Unlock()
+	return discovery.conn
+}
+
+// discoveryStatText 控制页展示用文案：能直接看出「有没有手机探测到达本机」
+func discoveryStatText(ready bool, last time.Time, peer string, probes int64) string {
+	if !ready {
+		return "未就绪"
 	}
-	defer conn.Close()
-	logf("自动发现已就绪（UDP %d）", discoverPort)
-	buf := make([]byte, 128)
-	for {
-		n, raddr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			return
+	if probes == 0 || last.IsZero() {
+		return "已就绪 · 尚未收到探测"
+	}
+	return fmt.Sprintf("已就绪 · 最近探测 %s（%s）", humanAgo(time.Since(last)), peer)
+}
+
+func humanAgo(d time.Duration) string {
+	switch {
+	case d < time.Second:
+		return "刚刚"
+	case d < time.Minute:
+		return fmt.Sprintf("%d 秒前", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%d 小时前", int(d.Hours()))
+	}
+}
+
+// ---------- 自动发现（UDP 广播应答）· 单 socket + 看守重建 ----------
+
+const (
+	discoveryHealthEvery = 5 * time.Second
+	discoverySelfTimeout = 800 * time.Millisecond
+	discoverySelfFailMax = 3
+	discoveryIdleFor     = 90 * time.Second // 超过这么久没有真实探测，才允许因自检失败重建
+)
+
+// openDiscovery 以**独占**方式绑定发现端口。
+//
+// 不再退回 SO_REUSEADDR：同端口多 socket 正是本故障的根因（Windows 对投递
+// 语义的定义是 indeterminate），静默共享比明确失败更难排查——实测双击
+// dist 里的旧实例后，新实例的兜底共享绑定会让 8322 上出现 3 只 socket，
+// 把"发现通道失聪"原样复现。端口真被占用就让监督器退避重试并告警。
+func openDiscovery() (*net.UDPConn, error) {
+	conn, err := listenUDPExclusive(discoverPort)
+	if err != nil {
+		if isAddrInUse(err) {
+			return nil, fmt.Errorf("UDP %d 已被占用（很可能有另一个 mibackpc 在运行，请只保留一个实例）：%v",
+				discoverPort, err)
 		}
-		if strings.TrimSpace(string(buf[:n])) != discoverMagic {
+		return nil, err
+	}
+	return conn, nil
+}
+
+// serveDiscovery 监督发现循环：绑定失败或读循环退出都会自动重建（指数退避封顶 30s）。
+//
+// 原实现把「应答 socket」和「监听 socket」都绑到 0.0.0.0:8322（SO_REUSEADDR），
+// 读循环只读后绑的那只。Windows 对同端口多 socket 的数据报投递是未定义的
+// （MSDN：the behavior for all sockets bound to that port is indeterminate），
+// 实测会出现读循环那只被饿死 → 发现通道永久失聪（Socket 仍在绑定态、无日志）。
+// 改为一只 socket 既收又发：应答源端口天然是 8322，与手机侧语义完全一致。
+func serveDiscovery(c *Config) {
+	backoff := time.Second
+	for {
+		conn, err := openDiscovery()
+		if err != nil {
+			discovery.mu.Lock()
+			discovery.ready, discovery.lastErr = false, err.Error()
+			discovery.mu.Unlock()
+			logf("自动发现(UDP %d)绑定失败：%v；%s 后重试", discoverPort, err, backoff)
+			time.Sleep(backoff)
+			backoff = nextBackoff(backoff, 30*time.Second)
 			continue
 		}
-		_, _ = conn.WriteToUDP(discoverPayload(c), raddr)
+		discovery.mu.Lock()
+		discovery.conn, discovery.ready, discovery.lastErr = conn, true, ""
+		discovery.mu.Unlock()
+		logf("自动发现已就绪（UDP %d，应答源端口 %d，单 socket 收发）",
+			discoverPort, conn.LocalAddr().(*net.UDPAddr).Port)
+
+		started := time.Now()
+		rerr := discoveryLoop(conn, c)
+		_ = conn.Close()
+
+		discovery.mu.Lock()
+		if discovery.conn == conn {
+			discovery.conn, discovery.ready = nil, false
+		}
+		discovery.lastErr = rerr.Error()
+		discovery.rebuilds++
+		rebuilds := discovery.rebuilds
+		discovery.mu.Unlock()
+
+		if time.Since(started) > time.Minute {
+			backoff = time.Second // 稳定运行过一段时间，重置退避
+		}
+		logf("自动发现循环退出（%v），%s 后重建（累计第 %d 次）", rerr, backoff, rebuilds)
+		time.Sleep(backoff)
+		backoff = nextBackoff(backoff, 30*time.Second)
 	}
+}
+
+// discoveryLoop 单 socket 收发循环。只有致命错误才退出（交由 serveDiscovery 重建），
+// 瞬时错误就地 continue——Windows 下 UDP 收到 ICMP port unreachable 会让读返回
+// WSAECONNRESET，属常见瞬时错误；原实现一律 return，手机一次「发完就退」的探测
+// 就足以把发现服务打死。
+func discoveryLoop(conn *net.UDPConn, c *Config) error {
+	buf := make([]byte, 256)
+	bad := 0
+	for {
+		n, raddr, rerr := conn.ReadFromUDP(buf)
+		if rerr != nil {
+			if errors.Is(rerr, net.ErrClosed) {
+				return rerr
+			}
+			if isTransientNetErr(rerr) {
+				continue
+			}
+			return rerr
+		}
+		loopback := raddr.IP.IsLoopback()
+		if !loopback {
+			discoveryNoteProbe(raddr.IP.String())
+		}
+		if strings.TrimSpace(string(buf[:n])) != discoverMagic {
+			bad++
+			// 回环自检包不记日志；其余限速记录（前 3 条 + 每 100 条一次），
+			// 便于区分「没收到」与「收到但格式不符」——原实现此处静默丢弃。
+			if !loopback && (bad <= 3 || bad%100 == 0) {
+				logf("发现端口收到非探测包（%s，%d 字节，累计 %d 个），已忽略", raddr.IP, n, bad)
+			}
+			continue
+		}
+		if !loopback {
+			logf("收到发现探测: %s", raddr.IP)
+		}
+		if _, werr := conn.WriteToUDP(discoverPayload(c), raddr); werr != nil {
+			logf("发现应答发送失败（%s）：%v", raddr.IP, werr)
+			if isTransientNetErr(werr) {
+				continue
+			}
+			return werr
+		}
+	}
+}
+
+// startDiscoveryKeeper 局域网发现通道的看守（原实现完全没有的那一环）：
+// 每 5s 从本机回环打一发探测码，连续 3 次收不到应答即判定自己的 socket 失聪，
+// 主动 Close 触发 serveDiscovery 重新绑定。
+// 回环流量不受 Windows 防火墙影响，因此该自检能精确定位「自己的 socket 收不到包」。
+func startDiscoveryKeeper() {
+	go func() {
+		fails, strikes := 0, 0
+		interval := discoveryHealthEvery
+		for {
+			time.Sleep(interval)
+			conn := discoveryCurrent()
+			if conn == nil {
+				continue // 未就绪，交给 serveDiscovery 的退避重试
+			}
+			if discoverySelfCheck() {
+				if fails >= discoverySelfFailMax {
+					logf("自动发现自检已恢复正常")
+				}
+				fails, strikes, interval = 0, 0, discoveryHealthEvery
+				continue
+			}
+			fails++
+			_, last, _, _, _, _ := discoveryInfo()
+			if !last.IsZero() && time.Since(last) < discoveryIdleFor {
+				fails = 0 // 近期仍有真实探测进来，socket 是活的，自检失败当环境噪声处理
+				continue
+			}
+			if fails < discoverySelfFailMax {
+				continue
+			}
+			if strikes >= 3 {
+				// 连续重建仍自检失败：停止频繁重建，避免打转（如本机回环被第三方 LSP 劫持）
+				logf("自动发现自检持续失败，暂停自动重建（服务保留）；请检查是否有其他程序占用 UDP %d", discoverPort)
+				interval = time.Minute
+				continue
+			}
+			strikes++
+			fails = 0
+			logf("自动发现自检失败 %d 次（回环探测无应答），重建 UDP %d 监听", discoverySelfFailMax, discoverPort)
+			_ = conn.Close() // 读循环随之返回 → serveDiscovery 重绑
+		}
+	}()
+}
+
+// discoverySelfCheck 从本机回环发探测码并等应答，验证发现 socket 是否还能收包
+func discoverySelfCheck() bool {
+	probe, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return false
+	}
+	defer probe.Close()
+	dst := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: discoverPort}
+	if _, err := probe.WriteToUDP([]byte(discoverMagic), dst); err != nil {
+		return false
+	}
+	_ = probe.SetReadDeadline(time.Now().Add(discoverySelfTimeout))
+	buf := make([]byte, 512)
+	for {
+		n, _, rerr := probe.ReadFromUDP(buf)
+		if rerr != nil {
+			return false
+		}
+		if strings.Contains(string(buf[:n]), `"mibackpc"`) {
+			return true
+		}
+	}
+}
+
+// isTransientNetErr 判断 UDP 读写错误是瞬时（可 continue）还是致命（需重建）。
+// 瞬时：Windows 收到 ICMP port unreachable → WSAECONNRESET；Linux 同类 → ECONNREFUSED；
+// 以及各类超时。
+func isTransientNetErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "connection reset") || strings.Contains(s, "forcibly closed") ||
+		strings.Contains(s, "connection refused") || strings.Contains(s, "timed out")
+}
+
+// nextBackoff 指数退避（×2，封顶 max）
+func nextBackoff(cur, max time.Duration) time.Duration {
+	next := cur * 2
+	if next > max {
+		next = max
+	}
+	return next
 }
 
 // ---------- 手机配对（请求 → 电脑端确认 → 下发凭据） ----------
@@ -592,11 +1029,55 @@ func pairHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 
 // ---------- 控制面（仅本机访问） ----------
 
+// virtualIfKeywords 虚拟/隧道类网卡名关键字（小写）。这些网卡的私有地址通常无法被
+// 手机访问（VMware/VirtualBox/Hyper-V 宿主虚拟网段、WSL/Docker/Tailscale 隧道），
+// 一旦被当作「局域网地址」下发给手机，手机据此探测必然失败。
+var virtualIfKeywords = []string{
+	"vmware", "vmnet", "virtualbox", "vbox", "hyper-v", "vethernet", "wsl",
+	"docker", "veth", "br-", "tap-", "tun", "utun", "npcap", "loopback",
+	"bluetooth", "zerotier", "tailscale", "hamachi", "openvpn", "wireguard",
+	"radmin", "ppp", "virtual", "pseudo",
+}
+
+func ifIsVirtual(name string) bool {
+	n := strings.ToLower(name)
+	for _, k := range virtualIfKeywords {
+		if strings.Contains(n, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// lanIPRank 越小越优先：物理网卡 + 家用/办公常见网段（192.168.x）排最前；
+// 虚拟网卡统一沉底（仍保留在候选列表里，手机可逐个尝试）。
+func lanIPRank(ifName string, ip net.IP) int {
+	rank := 0
+	if ifIsVirtual(ifName) {
+		rank += 100
+	}
+	switch {
+	case ip[0] == 192 && ip[1] == 168:
+		// 最优：家用/办公局域网
+	case ip[0] == 10:
+		rank += 5
+	default: // 172.16/12 等
+		rank += 15
+	}
+	return rank
+}
+
+// lanIPs 返回可下发给手机的局域网地址候选，物理网卡优先（原实现只按字符串排序，
+// 可能把 VMware/Hyper-V 虚拟网段排在真实局域网地址之前）。
 func lanIPs() []string {
-	var out []string
+	type cand struct {
+		ip   string
+		rank int
+	}
+	var cands []cand
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return out
+		return nil
 	}
 	for _, ia := range ifaces {
 		if ia.Flags&net.FlagUp == 0 || ia.Flags&net.FlagLoopback != 0 {
@@ -609,13 +1090,27 @@ func lanIPs() []string {
 				continue
 			}
 			ip4 := ipnet.IP.To4()
-			if ip4 == nil || !ip4.IsPrivate() {
+			if ip4 == nil || !ip4.IsPrivate() || ip4.IsLinkLocalUnicast() {
 				continue
 			}
-			out = append(out, ip4.String())
+			cands = append(cands, cand{ip4.String(), lanIPRank(ia.Name, ip4)})
 		}
 	}
-	sort.Strings(out)
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].rank != cands[j].rank {
+			return cands[i].rank < cands[j].rank
+		}
+		return cands[i].ip < cands[j].ip
+	})
+	seen := make(map[string]bool, len(cands))
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		if seen[c.ip] {
+			continue
+		}
+		seen[c.ip] = true
+		out = append(out, c.ip)
+	}
 	return out
 }
 
@@ -640,19 +1135,26 @@ func controlHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 		pairStore.mu.Lock()
 		pending := pairView(pairStore.current)
 		pairStore.mu.Unlock()
+		adb := adbGet()
+		dReady, dLast, dPeer, dProbes, dRebuilds, dErr := discoveryInfo()
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"root":          davRoot(),
-			"port":          c.Port,
-			"user":          c.User,
-			"pass":          c.Pass,
-			"lanIPs":        lanIPs(),
-			"adbURL":        fmt.Sprintf("http://127.0.0.1:%d/dav/", c.Port),
-			"adbOK":         adbReverseCached(c.Port),
-			"name":          hostName(),
-			"pairPending":   pending,
-			"pairedDevices": c.Pair,
-			"discoverPort":  discoverPort,
+			"root":             davRoot(),
+			"port":             c.Port,
+			"user":             c.User,
+			"pass":             c.Pass,
+			"lanIPs":           lanIPs(),
+			"adbURL":           fmt.Sprintf("http://127.0.0.1:%d/dav/", c.Port),
+			"adbOK":            adb.OK,
+			"adbReason":        adbReasonText(adb),
+			"name":             hostName(),
+			"pairPending":      pending,
+			"pairedDevices":    c.Pair,
+			"discoverPort":     discoverPort,
+			"discoverReady":    dReady,
+			"discoverStat":     discoveryStatText(dReady, dLast, dPeer, dProbes),
+			"discoverRebuilds": dRebuilds,
+			"discoverErr":      dErr,
 		})
 
 	case r.URL.Path == "/api/pair/decide" && r.Method == "POST":
@@ -713,6 +1215,10 @@ func controlHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 		logf("WebDAV 账号已更新为 %s", req.User)
 		w.WriteHeader(http.StatusNoContent)
 
+	case r.URL.Path == "/api/live" && r.Method == "GET":
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(live.snapshot())
+
 	case r.URL.Path == "/api/log" && r.Method == "GET":
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		logMu.Lock()
@@ -735,56 +1241,169 @@ func controlHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 	}
 }
 
-// adbReverse 尽力建立 USB 通道：手机访问 127.0.0.1:port 即到达本机（静默，仅失败记日志）
-func adbReverse(port int) bool {
+// ---------- USB 通道（adb reverse）· 后台探测 + 硬超时 + 指数退避 ----------
+//
+// 原实现把「spawn adb 子进程」放在全局 adbState.mu 里，且 CombinedOutput 无超时：
+// adb server 一旦卡住，1.2s 轮询 /api/state 的请求会全部串行堵在同一把锁上，
+// 控制页连带卡死。现在改为后台协程独自探测并缓存结果，
+// /api/state 只读缓存、永不 spawn 子进程。
+
+var errAdbMissing = errors.New("adb not found")
+
+// USB 通道后台探测的退避区间（见 startAdbMonitor 注释里的理由）
+const (
+	adbProbeMinInterval = 15 * time.Second
+	adbProbeMaxInterval = 60 * time.Second
+)
+
+type adbSnapshot struct {
+	OK      bool
+	Reason  string // 人类可读原因（无 adb / 无设备 / 未授权 / 未建立）
+	Checked time.Time
+}
+
+var adbState struct {
+	mu   sync.Mutex
+	snap adbSnapshot
+}
+
+func adbGet() adbSnapshot {
+	adbState.mu.Lock()
+	defer adbState.mu.Unlock()
+	return adbState.snap
+}
+
+func adbPut(s adbSnapshot) {
+	adbState.mu.Lock()
+	adbState.snap = s
+	adbState.mu.Unlock()
+}
+
+// adbRun 执行 adb 子进程（带硬超时，绝不无限等待）
+func adbRun(timeout time.Duration, args ...string) (string, error) {
+	bin := ""
 	for _, exe := range []string{"adb", "adb.exe"} {
 		if p, err := exec.LookPath(exe); err == nil {
-			cmd := exec.Command(p, "reverse", fmt.Sprintf("tcp:%d", port), fmt.Sprintf("tcp:%d", port))
-			if out, err := cmd.CombinedOutput(); err == nil {
-				_ = out
-				return true
-			} else {
-				logf("adb reverse 失败: %s", strings.TrimSpace(string(out)))
-			}
-			return false
+			bin = p
+			break
 		}
 	}
-	return false
-}
-
-// adbState 缓存 USB 通道状态：控制页轮询 /api/state 很频繁，不能每次都拉起 adb 子进程刷日志
-var adbState struct {
-	mu      sync.Mutex
-	ok      bool
-	known   bool
-	checked time.Time
-}
-
-// adbReverseCached 带缓存的通道探测（30s 内复用上次结果），状态变化才记日志
-func adbReverseCached(port int) bool {
-	adbState.mu.Lock()
-	defer adbState.mu.Unlock()
-	if adbState.known && time.Since(adbState.checked) < 30*time.Second {
-		return adbState.ok
+	if bin == "" {
+		return "", errAdbMissing
 	}
-	ok := adbReverse(port)
-	if adbState.known && ok != adbState.ok {
-		logf("USB 通道状态变化：%s", map[bool]string{true: "已建立", false: "未建立"}[ok])
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	if ctx.Err() != nil {
+		return string(out), fmt.Errorf("adb 响应超时（%s）", timeout)
 	}
-	adbState.ok, adbState.known, adbState.checked = ok, true, time.Now()
-	return ok
+	return string(out), err
 }
 
-// adbForce 控制页「重连」按钮：立即重新建立并刷新缓存
+// adbProbe 只读探测 USB 通道（不发 "reverse" 子命令）并给出可读原因
+func adbProbe(port int) adbSnapshot {
+	s := adbSnapshot{Checked: time.Now()}
+	out, err := adbRun(3*time.Second, "reverse", "--list")
+	if err != nil {
+		if errors.Is(err, errAdbMissing) {
+			s.Reason = "未找到 adb（未安装或不在 PATH）"
+		} else {
+			s.Reason = adbErrReason(out, err)
+		}
+		return s
+	}
+	needle := fmt.Sprintf("tcp:%d", port)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, needle) {
+			s.OK = true
+			s.Reason = fmt.Sprintf("已建立 (%d)", port)
+			return s
+		}
+	}
+	if r := adbErrReason(out, nil); strings.Contains(r, "设备") || strings.Contains(r, "授权") {
+		s.Reason = r
+		return s
+	}
+	s.Reason = "USB 通道未建立"
+	return s
+}
+
+// adbErrReason 把 adb 输出归纳成可读原因（区分「无设备」与「adb 本身故障」）
+func adbErrReason(out string, err error) string {
+	msg := strings.TrimSpace(out)
+	low := strings.ToLower(msg)
+	switch {
+	case strings.Contains(low, "no devices") || strings.Contains(low, "device not found") || strings.Contains(low, "no device"):
+		return "未检测到设备（USB 未连接或手机未授权调试）"
+	case strings.Contains(low, "unauthorized"):
+		return "设备未授权（请在手机上确认 USB 调试申请）"
+	case strings.Contains(low, "cannot connect") || strings.Contains(low, "server"):
+		return "adb server 异常：" + firstLine(msg)
+	}
+	if msg != "" {
+		return "adb 执行失败：" + firstLine(msg)
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "USB 通道未建立"
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
+// startAdbMonitor USB 通道后台轮询：15s ~ 60s 指数退避（成功即复位），状态变化才记日志。
+// 控制页的 1.2s 轮询因此不再触发任何 adb 子进程。
+//
+// 退避上限刻意取 60s 而非更长：退避过长会让「无设备 → 插上手机并 adb reverse 后」
+// 的控制页状态长时间停留在旧的「未建立」，用户会以为没生效。
+func startAdbMonitor(port int) {
+	go func() {
+		backoff := adbProbeMinInterval
+		for {
+			s := adbProbe(port)
+			prev := adbGet()
+			if !prev.Checked.IsZero() && (prev.OK != s.OK || prev.Reason != s.Reason) {
+				logf("USB 通道状态变化：%s", s.Reason)
+			}
+			adbPut(s)
+			if s.OK {
+				backoff = adbProbeMinInterval
+			} else {
+				backoff = nextBackoff(backoff, adbProbeMaxInterval)
+			}
+			time.Sleep(backoff)
+		}
+	}()
+}
+
+// adbForce 控制页「重连」按钮：真正执行 adb reverse 建立通道（同步，5s 硬上限）
 func adbForce(port int) bool {
-	adbState.mu.Lock()
-	defer adbState.mu.Unlock()
-	ok := adbReverse(port)
-	adbState.ok, adbState.known, adbState.checked = ok, true, time.Now()
-	if ok {
+	local := fmt.Sprintf("tcp:%d", port)
+	out, rerr := adbRun(5*time.Second, "reverse", local, local)
+	s := adbProbe(port)
+	adbPut(s)
+	switch {
+	case s.OK:
 		logf("USB 通道已重新建立 (%d)", port)
+	case rerr != nil:
+		logf("adb reverse 建立失败：%s", adbErrReason(out, rerr))
+	default:
+		logf("USB 通道仍不可用：%s", s.Reason)
 	}
-	return ok
+	return s.OK
+}
+
+// adbReasonText 控制页展示用文案
+func adbReasonText(s adbSnapshot) string {
+	if s.Checked.IsZero() {
+		return "检测中…"
+	}
+	return s.Reason
 }
 
 // ---------- 控制页（Apple 设计语言：系统字体栈 / 中性表面 / 单一强调色 / 明暗自适应） ----------
@@ -836,6 +1455,12 @@ const indexHTML = `<!DOCTYPE html>
  .kv+.kv{border-top:1px solid var(--hair)}
  .kv .k{color:var(--text2);font-size:13px;flex:none}
  .kv .v{font-size:14px;text-align:right;word-break:break-all}
+ .litem{padding:10px 0}
+ .litem+.litem{border-top:1px solid var(--hair)}
+ .litem .bar{height:4px;background:var(--field);border-radius:2px;margin-top:6px;overflow:hidden}
+ .litem .bar i{display:block;height:100%;background:var(--accent);border-radius:2px;transition:width .6s}
+ .litem .lmeta{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--text2);font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+ #liveList:empty::after{content:"暂无进行中的传输";color:var(--text2);font-size:13px}
  label{display:block;font-size:13px;font-weight:600;color:var(--text2);margin:14px 0 6px}
  input{width:100%;background:var(--field);border:none;outline:none;color:var(--text);
   border-radius:10px;padding:10px 14px;font-size:15px;font-family:inherit;
@@ -894,7 +1519,25 @@ const indexHTML = `<!DOCTYPE html>
   <div class="url"><code id="adbURL">…</code>
    <span class="chip" id="adbState"></span>
    <button class="small plain" onclick="doAdb()">重连</button></div>
+  <p class="hint" id="adbReason" style="margin:8px 0 0"></p>
+  <p class="hint" id="discoverState" style="margin:4px 0 0"></p>
   <p class="hint" style="margin:10px 0 0">USB 通道需要数据线连接且电脑已安装 adb；手机与电脑同一 WiFi 时走局域网。</p>
+ </div>
+
+ <div class="card" id="liveCard">
+  <h2>备份实时状态</h2>
+  <p class="hint">手机备份到本机的速度与进度（手机侧逐项串行备份；当前文件完成即切换）。</p>
+  <div class="row" style="justify-content:space-between">
+   <div>
+    <div class="kv"><span class="k" style="color:var(--text2);font-size:13px">当前速度</span>
+     <span class="v" id="liveSpeed" style="font-size:28px;font-weight:700;letter-spacing:-.02em">—</span></div>
+   </div>
+   <div style="text-align:right">
+    <div class="kv"><span class="k" style="color:var(--text2);font-size:13px">本次累计</span>
+     <span class="v" id="liveSession">0 B</span></div>
+   </div>
+  </div>
+  <div id="liveList"></div>
  </div>
 
  <div class="card">
@@ -926,9 +1569,13 @@ async function copy(text){ try{ await navigator.clipboard.writeText(text); toast
   catch(e){ toast(text); } }
 async function refresh(){
   const st = await (await fetch("/api/state")).json();
-  document.getElementById("root").value = st.root || "";
-  document.getElementById("user").value = st.user || "";
-  document.getElementById("pass").value = st.pass || "";
+  // 输入框获焦时跳过更新，避免轮询覆盖用户正在编辑的值
+  if (document.activeElement !== document.getElementById("root"))
+    document.getElementById("root").value = st.root || "";
+  if (document.activeElement !== document.getElementById("user"))
+    document.getElementById("user").value = st.user || "";
+  if (document.activeElement !== document.getElementById("pass"))
+    document.getElementById("pass").value = st.pass || "";
   const ips = st.lanIPs || [];
   document.getElementById("lanURLs").innerHTML = ips.length
     ? ips.map(ip => '<div class="url"><code>http://'+esc(ip)+':'+st.port+'/dav/</code>'+
@@ -938,6 +1585,11 @@ async function refresh(){
   const s = document.getElementById("adbState");
   s.className = "chip " + (st.adbOK ? "ok" : "no");
   s.innerHTML = '<span class="dot"></span>' + (st.adbOK ? "已建立" : "未建立");
+  document.getElementById("adbReason").textContent = "USB：" + (st.adbReason || "检测中…");
+  const dc = document.getElementById("discoverState");
+  dc.textContent = "局域网发现（UDP " + st.discoverPort + "）：" + (st.discoverStat || "—")
+    + (st.discoverRebuilds ? " · 已重建 " + st.discoverRebuilds + " 次" : "");
+  dc.style.color = st.discoverReady ? "" : "var(--bad)";
   const dv = document.getElementById("devices");
   dv.innerHTML = (st.pairedDevices||[]).map(d => '<span class="device"><span class="dot"></span>'+esc(d)+"</span>").join("");
   const p = st.pairPending;
@@ -956,6 +1608,27 @@ async function poll(){
   el.textContent = (j.lines||[]).join("\n");
   el.scrollTop = el.scrollHeight;
 }
+function fmtBytes(n){
+  if (n == null) return "—";
+  const u = ["B","KB","MB","GB","TB"]; let i = 0;
+  while (n >= 1024 && i < u.length-1) { n /= 1024; i++; }
+  return n.toFixed(n < 10 && i > 0 ? 1 : 0) + " " + u[i];
+}
+async function pollLive(){
+  try {
+   const j = await (await fetch("/api/live")).json();
+   const sp = document.getElementById("liveSpeed");
+   sp.textContent = j.speedMBps > 0 ? j.speedMBps.toFixed(1) + " MB/s" : "—";
+   const sess = j.session || {};
+   document.getElementById("liveSession").textContent = fmtBytes(sess.bytes||0) + " · " + (sess.files||0) + " 文件";
+   const items = j.active || [];
+   document.getElementById("liveList").innerHTML = items.map(t => {
+     const pct = t.total > 0 ? Math.min(100, Math.round(t.recv*100/t.total)) : 0;
+     return '<div class="litem"><div class="lmeta"><span>'+esc(t.path)+'</span><span>'+fmtBytes(t.recv)+(t.total>0 ? ' / '+fmtBytes(t.total)+' · '+pct+'%' : '')+'</span></div>'+
+      '<div class="bar"><i style="width:'+pct+'%"></i></div></div>';
+   }).join("");
+  } catch(e){}
+}
 async function decide(ok){
   await fetch("/api/pair/decide",{method:"POST",body:JSON.stringify({approve:ok})});
   toast(ok ? "已允许连接" : "已拒绝连接");
@@ -964,7 +1637,8 @@ async function decide(ok){
 async function setRoot(){ const r = await fetch("/api/root",{method:"POST",body:JSON.stringify({root:document.getElementById("root").value})}); if(!r.ok) toast(await r.text()); else toast("已保存"); refresh(); }
 async function setCred(){ const r = await fetch("/api/cred",{method:"POST",body:JSON.stringify({user:document.getElementById("user").value,pass:document.getElementById("pass").value})}); if(!r.ok) toast(await r.text()); else toast("已更新"); refresh(); }
 async function doAdb(){ await fetch("/api/adb",{method:"POST"}); refresh(); }
-refresh(); poll(); setInterval(refresh,1200); setInterval(poll,2000);
+refresh(); poll(); pollLive();
+setInterval(refresh,1200); setInterval(poll,2000); setInterval(pollLive,1500);
 </script></body></html>`
 
 // ---------- 入口 ----------
@@ -1016,6 +1690,8 @@ func main() {
 	mux.HandleFunc("/pair/", func(w http.ResponseWriter, r *http.Request) { pairHandler(w, r, c) })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { controlHandler(w, r, c) })
 	go serveDiscovery(c)
+	go startDiscoveryKeeper()  // 局域网发现通道看守：失聪即重建
+	go startAdbMonitor(c.Port) // USB 通道后台探测：不占用控制页轮询的锁
 
 	addr := ":" + strconv.Itoa(c.Port)
 	logf("mibackpc 启动：端口 %d，备份目录 %s", c.Port, rootDir)
@@ -1037,10 +1713,37 @@ func main() {
 			_ = mime.TypeByExtension(".html") // 保持 mime 包被引用
 		}()
 	}
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		fmt.Println("监听失败：", err)
-		fmt.Println("按回车退出...")
-		_, _ = fmt.Scanln()
-		os.Exit(1)
+	// 监听带重试：端口被上一实例占用时不再直接 os.Exit(1)（现场出现过
+	// ":8321 Only one usage of each socket address" 秒退）
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 15 * time.Second}
+	var lastErr error
+	for attempt := 1; attempt <= httpBindAttempts; attempt++ {
+		lastErr = srv.ListenAndServe()
+		if lastErr == nil || errors.Is(lastErr, http.ErrServerClosed) {
+			return
+		}
+		if !isAddrInUse(lastErr) {
+			break
+		}
+		logf("端口 %d 被占用（第 %d/%d 次）：%v；3 秒后重试（可能有另一个 mibackpc 正在运行）",
+			c.Port, attempt, httpBindAttempts, lastErr)
+		time.Sleep(3 * time.Second)
 	}
+	fmt.Println("监听失败：", lastErr)
+	fmt.Println("按回车退出...")
+	_, _ = fmt.Scanln()
+	os.Exit(1)
+}
+
+// httpBindAttempts HTTP 监听端口占用时的重试次数（3s 一次）
+const httpBindAttempts = 20
+
+// isAddrInUse 判断监听失败是否属于「端口被占用」（可重试）
+func isAddrInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "only one usage of each socket address") ||
+		strings.Contains(s, "address already in use")
 }
