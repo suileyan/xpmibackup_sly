@@ -29,6 +29,8 @@ public class XposedEntry implements IXposedHookLoadPackage {
         if ("com.android.settings".equals(lpparam.packageName)) {
             new SettingsHook().hook(lpparam);
         } else if ("com.miui.backup".equals(lpparam.packageName)) {
+            // 最先安装：宿主进程的私网明文放行（HIGH-26）——必须在任何网络请求之前生效
+            com.suileyan.xpmibackup.hook.LocalNetworkHook.hook(lpparam);
             new BackupHook().hook(lpparam);
             new AutoBackupHook().hook(lpparam);
             new AIDLHook().hook(lpparam);

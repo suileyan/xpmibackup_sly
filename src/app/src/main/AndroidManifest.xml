@@ -27,11 +27,14 @@
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true">
-        <!-- usesCleartextTraffic（HIGH-25）：targetSdk ≥ 28 默认禁止明文 HTTP，
+        <!-- usesCleartextTraffic（HIGH-26）：targetSdk ≥ 28 默认禁止明文 HTTP，
              而「备份至 PC」的局域网通道必然是 http://192.168.x.x:8321（配对 +
              WebDAV），自建 NAS/WebDAV 也多是 http。默认策略下 127.0.0.1 被放行、
              局域网地址被拦 —— 症状正是「USB 能用、局域网永远连不上」，
              且报错只落在日志里（Cleartext HTTP traffic to 192.168.x.x not permitted）。
+             注意：本属性**只作用于模块自身进程**（配对/凭据校验）；真正的备份 I/O 跑在
+             宿主 com.miui.backup 进程，用的是小米备份 APK 自己的策略，由
+             LocalNetworkHook（HIGH-26）在宿主内 Hook NetworkSecurityPolicy 放行私网明文。
              云盘等公网接口均为 https，放开明文不影响其安全性。 -->
 
         <!-- 主页 -->
