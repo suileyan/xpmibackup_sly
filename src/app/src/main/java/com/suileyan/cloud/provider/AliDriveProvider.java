@@ -129,7 +129,12 @@ public class AliDriveProvider implements CloudProvider {
     public List<RemoteEntry> listEntries(String remoteDir) throws CloudException {
         ensureIdentityKeys();
         var parentId = resolvePath(remoteDir, false);
-        if (parentId == null) return new ArrayList<>();
+        if (parentId == null) {
+            // 路径解析失败会以"空列表"的形式返回给宿主，与"目录确实为空"无法区分。
+            // 2026-09-16 恢复列表为空的排查里这是盲区之一，必须留痕。
+            LogHelp.d(TAG, "阿里云盘目录解析失败（不存在或某一级 list 为空）: " + remoteDir);
+            return new ArrayList<>();
+        }
         var out = new ArrayList<RemoteEntry>();
         for (var e : listChildren(parentId)) {
             out.add(new RemoteEntry(e.name, e.size, e.isDir, e.modifiedTime));
@@ -303,26 +308,7 @@ public class AliDriveProvider implements CloudProvider {
                 throw new CloudException(CloudException.Kind.REMOTE,
                         "阿里云盘缺少下载地址: " + truncate(urlJson.toString(), 300));
             }
-            // OSS 下载地址必须带 alipan Referer（对齐 alist Link()）
-            var request = new Request.Builder().url(dl)
-                    .header("Referer", ORIGIN + "/").build();
-            try (var resp = client().newCall(request).execute()) {
-                var code = resp.code();
-                if (code < 200 || code >= 300) {
-                    throw new CloudException(CloudException.Kind.REMOTE, "阿里云盘下载 HTTP " + code);
-                }
-                var respBody = resp.body();
-                if (respBody == null) {
-                    throw new CloudException(CloudException.Kind.REMOTE, "阿里云盘下载空响应");
-                }
-                try (var out = new FileOutputStream(localPath); var in = respBody.byteStream()) {
-                    var buffer = new byte[BUFFER_SIZE];
-                    int read;
-                    while ((read = in.read(buffer)) != -1) {
-                        out.write(buffer, 0, read);
-                    }
-                }
-            }
+            fetchToFile(dl, entry, localPath);
             var localLen = new File(localPath).length();
             LogHelp.i(TAG, "阿里云盘 download done name=" + entry.name
                     + " local=" + localLen + " remote=" + entry.size
@@ -333,6 +319,60 @@ public class AliDriveProvider implements CloudProvider {
         } catch (Exception e) {
             throw new CloudException(CloudException.Kind.REMOTE, e);
         }
+    }
+
+    /** 阿里云盘 CDN 的防盗链不只看 Referer，也看 User-Agent；OkHttp 默认 UA（okhttp/x.y）会被判为非浏览器来源 */
+    private static final String DESKTOP_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+    /**
+     * 用预签名下载地址取文件：逐个请求头变体尝试，全部失败才抛错，并把失败响应体带进异常。
+     *
+     * 之前只带 `Referer: https://www.alipan.com/` 且失败时把响应体丢掉了，logcat 里只剩一行
+     * "阿里云盘下载 HTTP 403"，无法判断是防盗链（Referer/UA 被判非法）还是签名过期（OSS SignatureDoesNotMatch）。
+     * 变体顺序：
+     *   1) alipan Referer + 桌面浏览器 UA —— 与 alist Link() 的 Header 组合对齐（+UA 修正）
+     *   2) 裸请求（不带 Referer）—— 防盗链对空 Referer 一般放行（浏览器地址栏直连即此形态）
+     *   3) 旧域名 aliyundrive.com Referer —— CDN 白名单可能是旧域名
+     */
+    private void fetchToFile(String downloadUrl, Entry entry, String localPath) throws CloudException {
+        String[] referers = { ORIGIN + "/", null, "https://www.aliyundrive.com/" };
+        var lastError = "";
+        for (var referer : referers) {
+            var builder = new Request.Builder().url(downloadUrl).header("User-Agent", DESKTOP_UA);
+            if (referer != null) builder.header("Referer", referer);
+            try (var resp = client().newCall(builder.build()).execute()) {
+                var code = resp.code();
+                var respBody = resp.body();
+                if (code < 200 || code >= 300) {
+                    var detail = respBody != null ? truncate(respBody.string(), 200) : "";
+                    lastError = "HTTP " + code + (detail.isEmpty() ? "" : " body=" + detail);
+                    LogHelp.w(TAG, "阿里云盘下载被拒 referer="
+                            + (referer == null ? "<none>" : referer) + " name=" + entry.name + " " + lastError);
+                    continue;
+                }
+                if (respBody == null) {
+                    lastError = "空响应";
+                    continue;
+                }
+                try (var out = new FileOutputStream(localPath); var in = respBody.byteStream()) {
+                    var buffer = new byte[BUFFER_SIZE];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                    }
+                }
+                if (referer == null) {
+                    LogHelp.i(TAG, "阿里云盘下载需去掉 Referer 才放行（CDN 防盗链按空 Referer 放行）");
+                }
+                return;
+            } catch (IOException e) {
+                lastError = e.toString();
+                LogHelp.w(TAG, "阿里云盘下载异常 referer="
+                        + (referer == null ? "<none>" : referer) + " " + lastError);
+            }
+        }
+        throw new CloudException(CloudException.Kind.REMOTE, "阿里云盘下载失败（已试 3 种请求头）: " + lastError);
     }
 
     // ========== 删除 ==========
@@ -679,7 +719,19 @@ public class AliDriveProvider implements CloudProvider {
             }
             var resp = request("/v2/file/list", body);
             var arr = resp.optJSONArray("items");
-            if (arr != null) {
+            if (arr == null) {
+                // 阿里云盘的错误响应并非都是 4xx：HTTP 200 + {"code":...,"message":...} 同样常见
+                // （TooManyRequests / NotFound.File / ParamError…）。此前被静默当成"空目录"，
+                // 症状是「有文件的目录 list 出 0 项 → 报文件不存在 → 恢复列表为空」，
+                // 且日志里没有任何线索。这里把 code/message 还原成异常。
+                var errCode = resp.optString("code", "");
+                if (!errCode.isEmpty()) {
+                    throw new CloudException(CloudException.Kind.REMOTE,
+                            "阿里云盘 list 失败 parent=" + parentId + " code=" + errCode
+                                    + " msg=" + resp.optString("message", "")
+                                    + " raw=" + truncate(resp.toString(), 200));
+                }
+            } else {
                 for (var i = 0; i < arr.length(); i++) {
                     var o = arr.optJSONObject(i);
                     if (o != null) items.add(toEntry(o));
@@ -687,6 +739,9 @@ public class AliDriveProvider implements CloudProvider {
             }
             marker = resp.optString("next_marker", "");
             if (marker.isEmpty()) break;
+        }
+        if (items.isEmpty()) {
+            LogHelp.d(TAG, "阿里云盘 list 结果为空 parent=" + parentId + "（目录不存在 / 确为空 / 响应缺 items）");
         }
         return items;
     }
