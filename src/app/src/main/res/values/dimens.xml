@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  间距 / 圆角 / 字号 令牌
+  间距 / 圆角 / 字号 / 动效 令牌（Material Design 3）
   ─────────────────────────────────────────────────────────────
-  间距：8pt 栅格（基线 4dp），见 layout-and-grid.md「手机端栅格（约定档）」
-  圆角：由官方「图片圆角 = 尺寸的 1/4」规则推导出的阶梯，控件越大圆角越大
-  字号：层级靠「字号 + 字重」拉开，正文锚点 15sp（贴近官方 16–18 的舒展正文）
+  间距：8pt 栅格（基线 4dp）
+  圆角：MD3 几何——控件越大圆角越大；按钮/胶囊 999dp（全圆角），
+        卡片/容器 16dp，输入框 12dp，小 chip 8dp，导航栏 0（贴边全宽）
+  字号：MD3 Type Scale 六档（Display/Headline/Title/Body/Label）
+  动效：MD3 标准时长 150/300/450ms + 弹簧参数（供 Java 临界阻尼弹簧读取）
 -->
 <resources>
     <!-- ========== 间距（8pt 栅格） ========== -->
@@ -19,46 +21,57 @@
     <dimen name="space_32">32dp</dimen>
 
     <!-- 语义间距 -->
-    <dimen name="page_padding_h">16dp</dimen>
+    <dimen name="page_padding_h">20dp</dimen>
     <dimen name="page_padding_top">8dp</dimen>
     <dimen name="page_padding_bottom">24dp</dimen>
-    <dimen name="card_padding">16dp</dimen>
+    <dimen name="card_padding">20dp</dimen>
     <dimen name="card_gap">12dp</dimen>
     <dimen name="section_gap">24dp</dimen>
     <dimen name="field_gap">12dp</dimen>
-    <dimen name="label_gap">6dp</dimen>
+    <dimen name="label_gap">8dp</dimen>
     <dimen name="list_item_height">56dp</dimen>
     <dimen name="touch_target_min">48dp</dimen>
 
-    <!-- ========== 圆角阶梯 ========== -->
+    <!-- ========== 圆角阶梯（MD3 几何） ========== -->
     <dimen name="radius_chip">8dp</dimen>
     <dimen name="radius_input">12dp</dimen>
-    <dimen name="radius_button">14dp</dimen>
-    <dimen name="radius_card">18dp</dimen>
-    <dimen name="radius_bar">24dp</dimen>
+    <dimen name="radius_button">999dp</dimen>
+    <dimen name="radius_card">16dp</dimen>
+    <dimen name="radius_bar">0dp</dimen>
+    <dimen name="radius_fab">16dp</dimen>
 
-    <!-- ========== 字号 ========== -->
-    <dimen name="text_page_title">22sp</dimen>
+    <!-- ========== 字号（MD3 Type Scale） ========== -->
+    <dimen name="text_page_title">24sp</dimen>
     <dimen name="text_section">16sp</dimen>
-    <dimen name="text_body">15sp</dimen>
-    <dimen name="text_label">13sp</dimen>
+    <dimen name="text_body">16sp</dimen>
+    <dimen name="text_label">14sp</dimen>
     <dimen name="text_caption">12sp</dimen>
-    <dimen name="text_tab">11sp</dimen>
+    <dimen name="text_tab">12sp</dimen>
 
-    <!-- ========== 顶栏 / 悬浮底栏 ========== -->
+    <!-- ========== 顶部标题栏 / 导航栏 ========== -->
     <dimen name="top_bar_height">56dp</dimen>
-    <dimen name="floating_bar_height">64dp</dimen>
-    <dimen name="floating_bar_margin_h">16dp</dimen>
-    <dimen name="floating_bar_margin_bottom">16dp</dimen>
-    <dimen name="floating_bar_icon">22dp</dimen>
-    <dimen name="floating_bar_core_icon">28dp</dimen>
-    <!-- 内容区底部预留 = 底栏高 + 底边距 + 呼吸间隙 -->
-    <dimen name="floating_bar_clearance">96dp</dimen>
+    <!-- 贴边全宽导航栏（MD3 Navigation Bar，surface-container，无圆角无悬浮留白） -->
+    <dimen name="nav_bar_height">80dp</dimen>
+    <dimen name="nav_bar_icon">24dp</dimen>
+    <dimen name="nav_bar_core_icon">32dp</dimen>
+    <!-- 兼容旧引用：悬浮底栏常量（贴边后不再用于底栏，但保留值以防 Java 引用） -->
+    <dimen name="floating_bar_height">80dp</dimen>
+    <dimen name="floating_bar_margin_h">0dp</dimen>
+    <dimen name="floating_bar_margin_bottom">0dp</dimen>
+    <dimen name="floating_bar_icon">24dp</dimen>
+    <dimen name="floating_bar_core_icon">32dp</dimen>
+    <!-- 内容区底部预留 = 导航栏高（贴边后无额外底边距） -->
+    <dimen name="floating_bar_clearance">80dp</dimen>
     <!-- 大屏（≥840dp 宽）切换为侧边导航栏时的宽度与内容预留 -->
     <dimen name="nav_rail_width">80dp</dimen>
     <dimen name="nav_rail_clearance">104dp</dimen>
 
-    <!-- ========== 大屏最大宽度约束（官方 L2：控件不得横向拉满整屏） ========== -->
+    <!-- ========== 大屏最大宽度约束（MD3 L2：控件不得横向拉满整屏） ========== -->
     <dimen name="content_max_width">640dp</dimen>
     <dimen name="floating_bar_max_width">560dp</dimen>
+
+    <!-- ========== 动效（MD3 时长档位，单位 ms；供 Java getDimensionPixelSize 读取） ========== -->
+    <dimen name="md3_anim_short">150</dimen>
+    <dimen name="md3_anim_medium">300</dimen>
+    <dimen name="md3_anim_long">450</dimen>
 </resources>

@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 底栏单项底：已选 = 品牌淡底胶囊；未选 = 透明。
-     选中态与未选中态共用同一圆角，避免切换时形状跳动。 -->
+<!-- 导航栏单项底（MD3 Navigation Bar）：已选 = primary-container 胶囊（999dp 全圆角）；
+     未选 = 透明。选中/未选共用同一全圆角，避免切换时形状跳动 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_selected="true">
         <shape android:shape="rectangle">
             <solid android:color="@color/brand_container" />
-            <corners android:radius="@dimen/radius_card" />
+            <corners android:radius="@dimen/radius_button" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="@dimen/radius_card" />
+            <corners android:radius="@dimen/radius_button" />
         </shape>
     </item>
 </selector>

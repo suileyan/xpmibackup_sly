@@ -131,15 +131,58 @@
             style="@style/XmButtonPrimary"
             android:text="@string/save_config" />
 
-        <TextView
-            android:id="@+id/tv_footer"
-            style="@style/XmTextCaption"
-            android:layout_width="wrap_content"
+        <!-- 底部：Powered by + 作者 + 脚本帮助（与 NAS 页一致） -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="center_horizontal"
-            android:layout_marginTop="@dimen/space_16"
-            android:autoLink="web"
-            android:text="@string/footer_text"
-            android:textColorLink="@color/brand" />
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginTop="@dimen/space_16">
+
+            <TextView
+                android:id="@+id/tv_footer"
+                style="@style/XmTextCaption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/footer_text" />
+
+            <TextView
+                android:id="@+id/tv_footer_zgcwkj"
+                style="@style/XmTextCaption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingStart="@dimen/space_4"
+                android:paddingEnd="@dimen/space_4"
+                android:text="@string/author"
+                android:textColor="@color/brand" />
+
+            <TextView
+                android:id="@+id/tv_footer_suileyan"
+                style="@style/XmTextCaption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingStart="@dimen/space_4"
+                android:paddingEnd="@dimen/space_4"
+                android:text="@string/footer_suileyan"
+                android:textColor="@color/brand" />
+
+            <TextView
+                android:id="@+id/tv_script_help"
+                style="@style/XmTextCaption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/space_16"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingStart="@dimen/space_4"
+                android:paddingEnd="@dimen/space_4"
+                android:text="@string/script_help_link"
+                android:textColor="@color/text_primary"
+                android:textStyle="bold" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

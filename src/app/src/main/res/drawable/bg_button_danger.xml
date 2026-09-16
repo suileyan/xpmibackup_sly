@@ -1,10 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 危险操作按钮：语义红填充（破坏性操作先声明后果） -->
+<!-- 危险操作按钮（MD3 错误色填充）：error 填充 + on-error 文字，全圆角 999dp + 按下 ripple -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
     android:color="@color/ripple_on_brand">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFFFF" />
+            <corners android:radius="@dimen/radius_button" />
+        </shape>
+    </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/danger" />
+            <solid android:color="@color/md3_error" />
             <corners android:radius="@dimen/radius_button" />
         </shape>
     </item>

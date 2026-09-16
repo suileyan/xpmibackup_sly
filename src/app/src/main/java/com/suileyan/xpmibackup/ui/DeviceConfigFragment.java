@@ -1,6 +1,7 @@
 package com.suileyan.xpmibackup.ui;
 
 import android.app.Fragment;
+import android.graphics.Paint;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -51,17 +52,15 @@ public class DeviceConfigFragment extends Fragment {
             }
         });
 
-        // 底部链接
-        var tvFooter = (TextView) view.findViewById(R.id.tv_footer);
-        tvFooter.setOnClickListener(v -> {
-            try {
-                var uri = Uri.parse(getString(R.string.author_url));
-                startActivity(new Intent(Intent.ACTION_VIEW, uri));
-            } catch (Exception e) {
-                // 无浏览器/Intent 不可解析时提示而非崩溃（MED-39）
-                LogHelp.e(TAG, "open author url failed", e);
-            }
-        });
+        // 底部链接：Powered by 两位作者 + 脚本帮助（与 NAS 页一致，各自独立跳转）
+        var tvFooterZgcwkj = (TextView) view.findViewById(R.id.tv_footer_zgcwkj);
+        tvFooterZgcwkj.setPaintFlags(tvFooterZgcwkj.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
+        tvFooterZgcwkj.setOnClickListener(v -> openUrl(getString(R.string.author_url)));
+        var tvFooterSuileyan = (TextView) view.findViewById(R.id.tv_footer_suileyan);
+        tvFooterSuileyan.setPaintFlags(tvFooterSuileyan.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
+        tvFooterSuileyan.setOnClickListener(v -> openUrl(getString(R.string.suileyan_url)));
+        var tvScriptHelp = (TextView) view.findViewById(R.id.tv_script_help);
+        tvScriptHelp.setOnClickListener(v -> openScriptHelp());
 
         return view;
     }
@@ -144,5 +143,37 @@ public class DeviceConfigFragment extends Fragment {
         } catch (Exception e) {
             return name;
         }
+    }
+
+    /** 打开 http(s) 链接，非 http(s) 拦截；无浏览器时静默失败（与 NAS 页一致） */
+    private void openUrl(String url) {
+        if (url == null) return;
+        try {
+            var uri = Uri.parse(url);
+            var scheme = uri.getScheme();
+            if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                LogHelp.w(TAG, "blocked non-http(s) url: " + url);
+                return;
+            }
+            startActivity(new Intent(Intent.ACTION_VIEW, uri));
+        } catch (Exception e) {
+            LogHelp.e(TAG, "open url failed: " + url, e);
+        }
+    }
+
+    /** 打开「如何自定义脚本」说明页（overlay 叠加，与 NAS 页一致） */
+    private void openScriptHelp() {
+        var help = new ScriptHelpFragment();
+        var ft = getFragmentManager().beginTransaction();
+        var overlay = getActivity() != null ? getActivity().findViewById(R.id.overlay_container) : null;
+        if (overlay != null) {
+            overlay.setTranslationX(0f);
+            overlay.setVisibility(View.VISIBLE);
+        }
+        ft.setCustomAnimations(R.animator.slide_in_right, R.animator.no_anim,
+                R.animator.no_anim, R.animator.no_anim);
+        ft.add(R.id.overlay_container, help);
+        ft.addToBackStack("script-help");
+        ft.commit();
     }
 }

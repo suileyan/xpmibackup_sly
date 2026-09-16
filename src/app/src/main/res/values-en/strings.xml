@@ -27,8 +27,8 @@
     <string name="about_latest">You are up to date</string>
     <string name="about_new_version">New version v%1$s available. Download now?</string>
     <string name="about_check_failed">Check failed. Please try again later.</string>
-    <string name="about_open_browser">Download</string>
-    <string name="about_download_apk">Download APK</string>
+    <string name="about_open_browser">GitHub Releases</string>
+    <string name="about_download_apk">Download APK (123)</string>
     <string name="tab_device_config">Device</string>
     <string name="tab_service_config">NAS</string>
     <string name="tab_account_config">Cloud</string>
@@ -195,7 +195,7 @@
     <string name="load_custom_script_sample">Load sample script</string>
     <string name="toast_sample_script_loaded">Sample script loaded. Modify it as needed.</string>
     <string name="script_vars_title">Script variables</string>
-    <string name="script_vars_hint">Placeholders like %*NAME*% in the script generate fields below; values are substituted at runtime after saving</string>
+    <string name="script_vars_hint" formatted="false">Placeholders like %*NAME*% in the script generate fields below; values are substituted at runtime after saving</string>
     <string name="script_below_hint">Script variables and the save button are below; scroll down to see them</string>
 
     <string name="toast_device_id_required">Please enter a device ID in Device settings first.</string>

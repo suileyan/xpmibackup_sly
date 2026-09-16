@@ -30,7 +30,8 @@ public class MainActivity extends Activity {
     /** Tab 顺序 */
     private static final String[] TAB_NAMES = {"device", "service", "account", "backup"};
     private static final int TAB_COUNT = TAB_NAMES.length;
-    private static final long SLIDE_MS = 280;
+    /** MD3 中档位移时长（令牌 md3_anim_medium，300ms） */
+    private static final long SLIDE_MS = 300;
 
     /** 顶栏标题文案（与 TAB_NAMES 一一对应） */
     private static final int[] TAB_TITLE_RES = {
@@ -72,6 +73,10 @@ public class MainActivity extends Activity {
     private boolean themeTransition = false;
     /** 启动版本检测只执行一次（进程内），使用过程中不再自动检测 */
     private static volatile boolean sUpdateChecked = false;
+    /** 免责声明对话框引用：避免 onResume 多次触发时叠加弹出（需同意后才消失） */
+    private AlertDialog disclaimerDialog = null;
+    /** 免责声明未同意时暂存的更新检测结果，同意后再弹窗，避免两层对话框叠加（Bug #3） */
+    private UpdateChecker.Result pendingUpdateResult = null;
 
     /**
      * 初始化界面：绑定Tab控件，注册切换事件，检查文件管理权限
@@ -207,8 +212,7 @@ public class MainActivity extends Activity {
         // 仅应用进入时自动检测一次版本（设置页可关闭，弹小窗可点空白取消）
         checkUpdatesOnLaunch();
         LogHelp.i("XpMiBackup", "STARTUP step: checkUpdates queued");
-        // 首次启动免责声明（3 秒倒计时后才能点同意）
-        maybeShowDisclaimer();
+        // 免责声明改由 onResume 触发（冷启动缺权限时 onCreate 提前 return 也会漏弹，见 Bug #3）
         LogHelp.i("XpMiBackup", "STARTUP step: onCreate END");
     }
 
@@ -245,9 +249,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 免责声明是否已同意（config.ini disclaimer_agreed 标记） */
+    private boolean disclaimerAgreed() {
+        return "true".equals(com.suileyan.comm.ConfigHelp.getString("disclaimer_agreed", ""));
+    }
+
+    /**
+     * 确保免责声明已展示：进程内仅弹一次（对话框仍显示或已同意后不再弹），
+     * 冷启动缺权限、主题重建后都会经 onResume 触发，解决首启漏弹（Bug #3）。
+     */
+    private void ensureDisclaimer() {
+        if (disclaimerDialog != null && disclaimerDialog.isShowing()) return;
+        if (disclaimerAgreed()) {
+            disclaimerDialog = null;
+            return;
+        }
+        maybeShowDisclaimer();
+    }
+
     /** 首次启动免责声明：不可取消，同意按钮 3 秒倒计时后可点 */
     private void maybeShowDisclaimer() {
-        if ("true".equals(com.suileyan.comm.ConfigHelp.getString("disclaimer_agreed", ""))) return;
+        if (disclaimerAgreed()) return;
         var dialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.disclaimer_title)
                 .setMessage(R.string.disclaimer_text)
@@ -256,6 +278,7 @@ public class MainActivity extends Activity {
                 .setNegativeButton(R.string.disclaimer_exit, (d, w) -> finishAffinity())
                 .create();
         dialog.show();
+        disclaimerDialog = dialog;
         var btn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
         btn.setEnabled(false);
         var remain = new int[]{3};
@@ -279,6 +302,12 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) {
                     }
                     dialog.dismiss();
+                    // 同意后再弹出此前暂存的更新检测窗，避免与免责声明叠加（Bug #3）
+                    if (pendingUpdateResult != null) {
+                        var pending = pendingUpdateResult;
+                        pendingUpdateResult = null;
+                        showUpdateDialog(pending);
+                    }
                 });
             }
         };
@@ -339,6 +368,11 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 // Activity 已销毁（用户快速退出/主题重建中）时不弹窗，避免 BadTokenException
                 if (isFinishing() || isDestroyed()) return;
+                // 免责声明未同意前不弹更新窗，暂存待同意后再弹，避免两层对话框叠加（Bug #3）
+                if (!disclaimerAgreed()) {
+                    pendingUpdateResult = result;
+                    return;
+                }
                 showUpdateDialog(result);
             });
         });
@@ -524,19 +558,22 @@ public class MainActivity extends Activity {
                 lp.weight = 0;
                 item.setLayoutParams(lp);
             }
+            // MD3 侧边导航栏：贴左边、纵向铺满（surface-container 色阶，与底部导航栏同色）
+            barLp.topMargin = 0;
+            barLp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+            barLp.gravity = android.view.Gravity.START;
         } else {
             bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-            var maxBar = getResources().getDimensionPixelSize(R.dimen.floating_bar_max_width);
-            barLp.width = Math.min(maxBar, getResources().getDisplayMetrics().widthPixels
-                    - 2 * getResources().getDimensionPixelSize(R.dimen.floating_bar_margin_h));
-            barLp.height = getResources().getDimensionPixelSize(R.dimen.floating_bar_height);
+            // 贴边全宽（MD3 Navigation Bar）：不设最大宽度、无水平/底部留白，铺满内容列宽度
+            barLp.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+            barLp.height = getResources().getDimensionPixelSize(R.dimen.nav_bar_height);
             barLp.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL;
             barLp.setMarginStart(0);
             barLp.setMarginEnd(0);
             barLp.bottomMargin = getResources().getDimensionPixelSize(R.dimen.floating_bar_margin_bottom)
                     + navBottomInset;
             bar.setPadding(getResources().getDimensionPixelSize(R.dimen.space_8),
-                    getResources().getDimensionPixelSize(R.dimen.space_6),
+                    getResources().getDimensionPixelSize(R.dimen.space_8),
                     getResources().getDimensionPixelSize(R.dimen.space_8),
                     getResources().getDimensionPixelSize(R.dimen.space_6));
             for (var item : navItems) {
@@ -587,13 +624,14 @@ public class MainActivity extends Activity {
                 floatingBar.setTranslationX(tx);
                 floatingBar.setTranslationY(ty);
                 floatingBar.setAlpha(0f);
-                floatingBar.animate().translationX(0f).translationY(0f).alpha(1f).setDuration(220)
-                        .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
+                floatingBar.animate().translationX(0f).translationY(0f).alpha(1f).setDuration(300)
+                        .setInterpolator(Md3SpringInterpolator.ENTER.withDuration(300)).start();
             } else {
                 floatingBar.setAlpha(1f);
             }
         } else if (animationsEnabled()) {
-            floatingBar.animate().translationX(tx).translationY(ty).alpha(0f).setDuration(160)
+            floatingBar.animate().translationX(tx).translationY(ty).alpha(0f).setDuration(300)
+                    .setInterpolator(Md3SpringInterpolator.EXIT.withDuration(300))
                     .withEndAction(() -> {
                         if (!barVisible) floatingBar.setVisibility(View.GONE);
                     }).start();
@@ -606,7 +644,7 @@ public class MainActivity extends Activity {
         applyClearance();
     }
 
-    /** 按下反馈：图标底板轻微缩放（≤1.02 的克制幅度区间，取 0.94 做下压感） */
+    /** 按下反馈：图标底板轻微缩放（合成层，0.94 下压感）+ MD3 短档弹簧；点击同时给触觉反馈 */
     private void pressFeedback(View box, boolean pressed) {
         if (box == null) return;
         if (!animationsEnabled()) {
@@ -616,8 +654,60 @@ public class MainActivity extends Activity {
         }
         box.animate().cancel();
         var scale = pressed ? 0.94f : 1f;
-        box.animate().scaleX(scale).scaleY(scale).setDuration(120)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+        var anim = box.animate().scaleX(scale).scaleY(scale)
+                .setDuration(pressed ? 150 : 220)
+                .setInterpolator(pressed ? Md3SpringInterpolator.PRESS.withDuration(150)
+                        : Md3SpringInterpolator.RELEASE.withDuration(220));
+        // 按下瞬间触觉反馈（MD3 触感规范：轻触感 VIRTUAL_KEY）；
+        // FLAG_IGNORE_GLOBAL_SETTING 不绕过系统"关闭震动"设置，无震动硬件时静默降级
+        if (pressed && animationsEnabled()) {
+            box.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+        }
+        anim.start();
+    }
+
+    /**
+     * MD3 物理弹簧插值器（零依赖，framework TimeInterpolator）：
+     * 临界阻尼弹簧 x(t)=1-e^(-wt)(1+w·t)，无过冲、收尾带物理"落定"感。
+     * 归一化到终点值 1（见 getInterpolation）：spring 在 input=1 处本不等于 1，
+     * 直接用作位移插值器会让动画残留目标外偏移（标签页切换偏移 Bug #1），归一化后精确落位。
+     * 各场景独立实例（springAnimation 会改动内部时长，必须隔离）：
+     *  · PRESS / RELEASE —— 150ms 短档（按下 / 回弹）
+     *  · TAB / ENTER / EXIT —— 300ms 中档（Tab 位移 / 导航栏收展）
+     *  · PULL —— 200ms（预测返回盒子跟手）
+     * 系统"动画时长 0"时由调用方 animationsEnabled() 降级为直接跳变。
+     */
+    private static final class Md3SpringInterpolator implements android.animation.TimeInterpolator {
+        /** 临界阻尼弹簧刚度（ω，单位 1/ms）：ω=12 时 300ms 内位移量≈1.0，收尾自然 */
+        private static final float OMEGA = 12f;
+        private static final Md3SpringInterpolator PRESS = new Md3SpringInterpolator();
+        private static final Md3SpringInterpolator RELEASE = new Md3SpringInterpolator();
+        private static final Md3SpringInterpolator TAB = new Md3SpringInterpolator();
+        private static final Md3SpringInterpolator ENTER = new Md3SpringInterpolator();
+        private static final Md3SpringInterpolator EXIT = new Md3SpringInterpolator();
+        private static final Md3SpringInterpolator PULL = new Md3SpringInterpolator();
+
+        private long durationMs = 300;
+
+        private Md3SpringInterpolator withDuration(long ms) {
+            this.durationMs = ms;
+            return this;
+        }
+
+        @Override
+        public float getInterpolation(float input) {
+            // 采样点按当前调用方实例的时长换算
+            var w = OMEGA * (durationMs / 1000f);
+            var t = w * input;
+            var v = 1f - (float) (Math.exp(-t) * (1f + t));
+            // 归一化：临界阻尼弹簧在 input=1 处并不等于 1（ω=12、300ms 时仅≈0.874），
+            // 直接用作 TimeInterpolator 会让 translationX 位移动画永远落不到精确目标，
+            // 标签页切换残留 ~155px 偏移、跨多页跳转（如 Backup→Device）放大到 ~400px（Bug #1，
+            // UI 证据 Backup +155 / Cloud −925）。除以终点值使其 getInterpolation(1.0)==1.0，
+            // 所有调用方（Tab 平移 / 底栏收展 / 按压回弹）都精确落位，物理"落定"手感保留。
+            var end = 1f - (float) (Math.exp(-w) * (1f + w));
+            return end > 1e-6f ? v / end : v;
+        }
     }
 
     /** 系统动画时长档位为 0（开发者选项/无障碍）时不播放过渡 */
@@ -793,10 +883,12 @@ public class MainActivity extends Activity {
             animating = false;
             var w = screenW();
             if (overlayTopView != null) {
-                overlayTopView.animate().translationX(0f).setDuration(150).start();
+                overlayTopView.animate().translationX(0f).setDuration(150)
+                        .setInterpolator(Md3SpringInterpolator.PULL.withDuration(150)).start();
             }
             if (overlayBelowView != null) {
-                overlayBelowView.animate().translationX(-w).setDuration(150).start();
+                overlayBelowView.animate().translationX(-w).setDuration(150)
+                        .setInterpolator(Md3SpringInterpolator.PULL.withDuration(150)).start();
             }
         }
 
@@ -817,10 +909,12 @@ public class MainActivity extends Activity {
             // 从跟手位置无缝衔接继续动画：当前页继续推出到屏外、下层"上一层"页滑入到位，
             // 消除快速手势时"当前页瞬移消失 + 下层长距离回弹"的顿挫感
             if (top != null) {
-                top.animate().translationX(w).setDuration(200).start();
+                top.animate().translationX(w).setDuration(300)
+                        .setInterpolator(Md3SpringInterpolator.PULL.withDuration(300)).start();
             }
             if (below != null) {
-                below.animate().translationX(0f).setDuration(200).start();
+                below.animate().translationX(0f).setDuration(300)
+                        .setInterpolator(Md3SpringInterpolator.PULL.withDuration(300)).start();
             }
             // 动画结束后移除当前页（无转场动画，此时当前页已在屏外，移除不可见）
             overlayContainer.postDelayed(() -> {
@@ -828,7 +922,7 @@ public class MainActivity extends Activity {
                     pendingPop = false;
                     popOverlayNoAnim();
                 }
-            }, 220);
+            }, 320);
         }
 
         /** overlay 无动画弹出（pop 不播放任何 fragment 转场动画） */
@@ -934,9 +1028,10 @@ public class MainActivity extends Activity {
             if (f == null || f.getView() == null) continue;
             var v = f.getView();
             var target = (float) (i - targetIndex) * width;
-            if (animate) {
-                v.animate().translationX(target).setDuration(SLIDE_MS).start();
-            } else {
+        if (animate) {
+            v.animate().translationX(target).setDuration(SLIDE_MS)
+                    .setInterpolator(Md3SpringInterpolator.TAB.withDuration(SLIDE_MS)).start();
+        } else {
                 v.setTranslationX(target);
             }
         }
@@ -1021,20 +1116,18 @@ public class MainActivity extends Activity {
             updateTabSelection(TAB_NAMES[0]);
             updateBackInvoke();
         }
+        // 免责声明：冷启动/主题重建后经 onResume 触发，仅弹一次（Bug #3）
+        ensureDisclaimer();
         maybePromptModuleRestore();
         LogHelp.i("XpMiBackup", "STARTUP step: onResume END");
     }
 
     /**
-     * 更新悬浮底栏选中态与顶栏标题。
-     * 配色规则（小米手法：层级靠同一支色的不同不透明度，不堆灰阶）：
-     * · 未选中——图标/文字用 text_tertiary（对底栏表面 4.7:1，满足 WCAG 2.1 AA）
-     * · 已选中——品牌色淡底胶囊 + 品牌色图标 + text_primary 文字（15:1）
+     * 更新导航栏选中态与顶栏标题。
+     * MD3 Navigation Bar 配色规则：
+     * · 未选中——图标/文字用 on-surface-variant（tab_icon_idle / tab_text_idle）
+     * · 已选中——primary-container 胶囊底（bg_nav_item 已承载）+ on-primary-container 图标/文字
      * · 核心操作（备份）——图标常驻品牌色实心圆 + 白色反色图标，与其余导航项区分
-     *
-     * 关于「选中文字为什么不用品牌色」：#FF6900 对白底 / 白字对比度约 2.88:1，
-     * 对品牌淡底仅 2.4:1，作为正文色不满足 WCAG 2.1 AA（4.5:1）。品牌色是官方强制色值，
-     * 故改为：品牌身份由「胶囊底 + 图标色 + 核心圆」承载，文字改用 text_primary 保证可读性。
      */
     private void updateTabSelection(String tab) {
         for (var i = 0; i < TAB_COUNT; i++) {
@@ -1050,8 +1143,8 @@ public class MainActivity extends Activity {
     private void applyTabState(int index, boolean selected) {
         if (navItems == null || index < 0 || index >= navItems.length) return;
         var res = getResources();
-        var idleTextColor = res.getColor(R.color.text_tertiary, getTheme());
-        var activeTextColor = res.getColor(R.color.text_primary, getTheme());
+        var idleTextColor = res.getColor(R.color.tab_text_idle, getTheme());
+        var activeTextColor = res.getColor(R.color.tab_text_selected, getTheme());
         navItems[index].setSelected(selected);
         navTexts[index].setTextColor(selected ? activeTextColor : idleTextColor);
         if (index == CORE_TAB) {
@@ -1059,7 +1152,7 @@ public class MainActivity extends Activity {
             navIcons[index].setColorFilter(res.getColor(R.color.on_brand, getTheme()));
         } else {
             navIcons[index].setColorFilter(res.getColor(
-                    selected ? R.color.brand : R.color.text_tertiary, getTheme()));
+                    selected ? R.color.tab_icon_selected : R.color.tab_icon_idle, getTheme()));
         }
     }
 

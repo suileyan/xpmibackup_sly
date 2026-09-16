@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 兼容旧引用：悬浮底栏容器。贴边 MD3 后指向 bg_nav_bar（surface-container 全宽），
-     保留文件名以防 layout/Java 引用 -->
+<!-- 贴边全宽导航栏（MD3 Navigation Bar）：surface-container 色阶 + 顶部 1px outline 分割线。
+     无圆角、无悬浮留白（贴屏底），层级靠色阶（nav_bar 比背景深一档）而非投影 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 顶部 1px 分割线（MD3 导航栏顶部 outline 档） -->
     <item android:gravity="top">
         <shape android:shape="rectangle">
             <solid android:color="@color/nav_bar_border" />

@@ -211,7 +211,7 @@ public class ServiceConfigFragment extends Fragment {
             // 当前选项卡下无已保存方案：下拉显示「新配置」占位，与命名区一致，引导多配置管理
             names.add(getString(R.string.profile_unsaved_name));
         }
-        var adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item, names);
+        var adapter = new ArrayAdapter<>(getActivity(), R.layout.spinner_item, names);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         profileSpinner.setAdapter(adapter);
 
@@ -530,8 +530,8 @@ public class ServiceConfigFragment extends Fragment {
         tabCustom.setBackgroundResource(custom ? R.drawable.bg_tab_selected : R.drawable.bg_tab_normal);
         containerNas.setVisibility(custom ? View.GONE : View.VISIBLE);
         containerCustom.setVisibility(custom ? View.VISIBLE : View.GONE);
-        tabNas.setTextColor(getResources().getColor(custom ? R.color.text_secondary : R.color.brand));
-        tabCustom.setTextColor(getResources().getColor(custom ? R.color.brand : R.color.text_secondary));
+        tabNas.setTextColor(getResources().getColor(custom ? R.color.text_secondary : R.color.md3_primary));
+        tabCustom.setTextColor(getResources().getColor(custom ? R.color.md3_primary : R.color.text_secondary));
         // 「如何自定义脚本」链接仅自定义配置选项卡显示（NAS 选项卡无脚本上下文）
         tvScriptHelp.setVisibility(custom ? View.VISIBLE : View.GONE);
         // 配置名称联动：自定义页标签/hint 改为脚本方案提示，NAS 页恢复通用（用户明确知道在命名哪类配置）

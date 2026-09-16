@@ -4,4 +4,5 @@
     android:shape="rectangle">
     <solid android:color="@color/icon_tile" />
     <corners android:radius="@dimen/radius_chip" />
+
 </shape>

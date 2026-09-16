@@ -660,7 +660,7 @@ public class BackupFragment extends Fragment {
         for (var p : profiles) {
             names.add(p.name != null && !p.name.isEmpty() ? p.name : typeLabel(p.type));
         }
-        var adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item, names);
+        var adapter = new ArrayAdapter<>(getActivity(), R.layout.spinner_item, names);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         profileSpinner.setAdapter(adapter);
 
@@ -697,7 +697,7 @@ public class BackupFragment extends Fragment {
                 for (var a : cloudAccounts) {
                     names.add(com.suileyan.cloud.AccountDisplay.display(a));
                 }
-                var adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item, names);
+                var adapter = new ArrayAdapter<>(getActivity(), R.layout.spinner_item, names);
                 adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
                 cloudSpinner.setAdapter(adapter);
                 if (onLoaded != null) onLoaded.run();

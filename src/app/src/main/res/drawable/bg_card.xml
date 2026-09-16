@@ -1,18 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 卡片：中性表面 + 1px 内描边（官方「内描边 1px 10%」手法），不加投影 -->
+<!-- 卡片（MD3）：surface-container 阶 + 顶部 2dp 极轻投影（仅悬浮层），去 1px 描边；
+     层级靠色阶（surface-container 比 background 深一档）而非描边 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 顶部 2dp 投影：用同色加深阶模拟，不依赖 elevation（Xposed 宿主兼容） -->
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/surface" />
+            <solid android:color="@color/card_border" />
             <corners android:radius="@dimen/radius_card" />
         </shape>
     </item>
-    <item>
+    <item android:top="2dp">
         <shape android:shape="rectangle">
-            <solid android:color="@android:color/transparent" />
-            <stroke
-                android:width="1dp"
-                android:color="@color/card_border" />
+            <solid android:color="@color/surface_variant" />
             <corners android:radius="@dimen/radius_card" />
         </shape>
     </item>

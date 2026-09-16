@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 方案/账号下拉选中态：不省略、单行，避免「默认 SMB」等长名称被截断为「默认 S..」 -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/text1"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:ellipsize="none"
+    android:gravity="center_vertical"
+    android:singleLine="true"
+    android:textSize="@dimen/text_label" />

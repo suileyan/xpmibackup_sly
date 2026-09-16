@@ -81,7 +81,7 @@ public class CloudProviderSelectFragment extends Fragment {
 
         var icon = new ImageView(getActivity());
         icon.setImageResource(iconRes);
-        icon.setColorFilter(getResources().getColor(R.color.brand));
+        icon.setColorFilter(getResources().getColor(R.color.md3_primary));
         icon.setBackgroundResource(R.drawable.bg_account_icon);
         icon.setPadding(dp(10), dp(10), dp(10), dp(10));
         var iconLp = new LinearLayout.LayoutParams(dp(44), dp(44));

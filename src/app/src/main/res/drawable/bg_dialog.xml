@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 对话框底：圆角中性表面，圆角与卡片同档 -->
+<!-- 对话框底（MD3）：surface-container-highest 阶，28dp 大圆角（MD3 对话框/大容器档） -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="@color/surface" />
-    <corners android:radius="@dimen/radius_bar" />
+    <solid android:color="@color/md3_surface_container_highest" />
+    <corners android:radius="28dp" />
 </shape>

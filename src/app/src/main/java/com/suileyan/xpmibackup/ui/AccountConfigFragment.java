@@ -156,7 +156,7 @@ public class AccountConfigFragment extends Fragment {
         btnRelogin.setText(R.string.relogin_account);
         btnRelogin.setTextSize(12f);
         btnRelogin.setAllCaps(false);
-        btnRelogin.setTextColor(getResources().getColor(R.color.text_on_brand));
+        btnRelogin.setTextColor(getResources().getColor(R.color.md3_on_primary));
         btnRelogin.setBackgroundResource(R.drawable.bg_button_primary);
         btnRelogin.setPadding(dp(14), 0, dp(14), 0);
         btnRelogin.setMinWidth(0);
@@ -173,7 +173,7 @@ public class AccountConfigFragment extends Fragment {
         btnDelete.setText(R.string.delete_account);
         btnDelete.setTextSize(12f);
         btnDelete.setAllCaps(false);
-        btnDelete.setTextColor(getResources().getColor(R.color.text_on_brand));
+        btnDelete.setTextColor(getResources().getColor(R.color.md3_on_error));
         btnDelete.setBackgroundResource(R.drawable.bg_button_danger);
         btnDelete.setPadding(dp(14), 0, dp(14), 0);
         btnDelete.setMinWidth(0);
@@ -213,17 +213,17 @@ public class AccountConfigFragment extends Fragment {
         switch (status) {
             case VALID:
                 statusText.setText(R.string.cred_valid);
-                statusText.setTextColor(getResources().getColor(R.color.success));
+                statusText.setTextColor(getResources().getColor(R.color.md3_success));
                 btnRelogin.setVisibility(View.GONE);
                 break;
             case WEAK:
                 statusText.setText(R.string.cred_weak);
-                statusText.setTextColor(getResources().getColor(R.color.warning));
+                statusText.setTextColor(getResources().getColor(R.color.md3_warning));
                 btnRelogin.setVisibility(View.VISIBLE);
                 break;
             case INVALID:
                 statusText.setText(R.string.cred_invalid);
-                statusText.setTextColor(getResources().getColor(R.color.danger));
+                statusText.setTextColor(getResources().getColor(R.color.md3_error));
                 btnRelogin.setVisibility(View.VISIBLE);
                 break;
             case ERROR:

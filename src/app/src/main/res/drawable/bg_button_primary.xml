@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 主 CTA：品牌橙填充 + ripple 光效反馈（官方「点按有光」） -->
+<!-- 主 CTA（MD3 Filled Button）：primary 填充 + on-primary 文字，全圆角 999dp + 按下 ripple。
+     mask 同 999dp 圆角，保证 ripple 光效不溢出胶囊轮廓 -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
     android:color="@color/ripple_on_brand">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFFFF" />
+            <corners android:radius="@dimen/radius_button" />
+        </shape>
+    </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/brand" />
+            <solid android:color="@color/md3_primary" />
             <corners android:radius="@dimen/radius_button" />
         </shape>
     </item>

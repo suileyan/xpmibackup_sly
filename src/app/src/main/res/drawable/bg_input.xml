@@ -1,18 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 输入框：中性填充，聚焦时出现品牌色描边环（交互反馈走描边而非换色） -->
+<!-- 输入框（MD3 Filled/Outlined）：surface-container-low 填充，聚焦时 primary 描边环；
+     圆角 12dp，层级靠色阶（input 比 background 深一档）而非描边 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <solid android:color="@color/input_bg" />
             <stroke
-                android:width="1.5dp"
-                android:color="@color/brand" />
+                android:width="2dp"
+                android:color="@color/md3_primary" />
+            <corners android:radius="@dimen/radius_input" />
+        </shape>
+    </item>
+    <item android:state_activated="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/input_bg" />
+            <stroke
+                android:width="1dp"
+                android:color="@color/md3_primary" />
             <corners android:radius="@dimen/radius_input" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@color/input_bg" />
+            <stroke
+                android:width="1dp"
+                android:color="@color/md3_outline_variant" />
             <corners android:radius="@dimen/radius_input" />
         </shape>
     </item>

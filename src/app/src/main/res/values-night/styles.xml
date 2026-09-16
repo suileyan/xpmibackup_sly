@@ -1,30 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  小米（HyperOS）风格样式表 —— 深色
+  Material Design 3 样式表 —— 深色
   ─────────────────────────────────────────────────────────────
-  只覆盖与浅色不同的部分：主题父类、状态栏图标、对话框父类。
-  颜色本身由 values-night/colors.xml 对称翻转，样式表结构与浅色一致。
+  只覆盖与浅色不同的部分：主题父类、状态栏图标、对话框父类、MD3 控件默认外观。
+  颜色本身由 values-night/colors.xml 深色色板翻转，样式表结构与浅色一致。
 -->
 <resources>
 
     <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
-        <item name="android:colorPrimary">@color/brand</item>
+        <item name="android:colorPrimary">@color/md3_primary</item>
         <item name="android:colorPrimaryDark">@color/brand_pressed</item>
-        <item name="android:colorAccent">@color/brand</item>
+        <item name="android:colorAccent">@color/md3_primary</item>
         <item name="android:windowBackground">@color/background</item>
         <item name="android:statusBarColor">@color/status_bar</item>
         <item name="android:navigationBarColor">@color/background</item>
-        <item name="android:colorControlActivated">@color/brand</item>
+        <item name="android:colorControlActivated">@color/md3_primary</item>
         <item name="android:colorControlHighlight">@color/ripple</item>
         <item name="android:textColorPrimary">@color/text_primary</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
         <item name="android:textColorHint">@color/text_hint</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:alertDialogTheme">@style/XmDialogTheme</item>
+        <item name="android:editTextColor">@color/text_primary</item>
+        <item name="android:colorButtonNormal">@color/surface_variant</item>
     </style>
 
     <style name="XmDialogTheme" parent="android:Theme.Material.Dialog.Alert">
-        <item name="android:colorAccent">@color/brand</item>
+        <item name="android:colorAccent">@color/md3_primary</item>
         <item name="android:textColorPrimary">@color/text_primary</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
         <item name="android:windowBackground">@drawable/bg_dialog</item>

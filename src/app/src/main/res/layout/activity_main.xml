@@ -93,15 +93,13 @@
             android:layout_height="@dimen/floating_bar_clearance" />
     </LinearLayout>
 
-    <!-- ==================== 悬浮底栏层 ==================== -->
-    <!-- 悬浮于内容之上：24dp 圆角、1px 内描边、elevation 投影、左右 16dp + 底部 16dp 留白 -->
+    <!-- ==================== 贴边全宽导航栏层（MD3 Navigation Bar） ==================== -->
+    <!-- 贴屏底全宽：无水平/底部留白、无圆角，surface-container 色阶 + 顶部 1px outline 分割；
+         Android 15+ edge-to-edge 下按导航栏 inset 抬升，避免被手势条遮挡（MainActivity.applyFloatingBarInsets） -->
     <LinearLayout
         android:id="@+id/tab_bar_container"
-        style="@style/XmFloatingBar"
-        android:layout_gravity="bottom"
-        android:layout_marginStart="@dimen/floating_bar_margin_h"
-        android:layout_marginEnd="@dimen/floating_bar_margin_h"
-        android:layout_marginBottom="@dimen/floating_bar_margin_bottom">
+        style="@style/XmNavBar"
+        android:layout_gravity="bottom">
 
         <!-- 设备配置 -->
         <LinearLayout

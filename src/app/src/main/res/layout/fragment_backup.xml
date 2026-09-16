@@ -159,14 +159,15 @@
         <!-- Root 模块备份：打包 Magisk/KernelSU/APatch 模块目录并入本次备份 -->
         <LinearLayout
             style="@style/XmCardRow"
+            android:orientation="vertical"
+            android:gravity="start"
             android:layout_marginBottom="@dimen/section_gap">
 
             <CheckBox
                 android:id="@+id/cb_root_modules"
                 style="@style/XmCheckBox"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:checked="true"
                 android:text="@string/root_modules_backup"
                 android:textSize="@dimen/text_label" />
@@ -175,44 +176,46 @@
         <!-- 自动删除本地已上传备份文件：上传成功后删 AllBackupTemp 源文件，节省存储空间 -->
         <LinearLayout
             style="@style/XmCardRow"
+            android:orientation="vertical"
+            android:gravity="start"
             android:layout_marginBottom="@dimen/section_gap">
 
             <CheckBox
                 android:id="@+id/cb_auto_delete_local"
                 style="@style/XmCheckBox"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="@string/auto_delete_local"
                 android:textSize="@dimen/text_label" />
 
             <TextView
                 style="@style/XmTextCaption"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_gravity="center_vertical"
+                android:layout_marginTop="@dimen/space_4"
                 android:text="@string/auto_delete_local_hint" />
         </LinearLayout>
 
         <!-- 串行上传：备份完成一项（100%）后再备份下一项，而非多项 30% 并行 -->
         <LinearLayout
             style="@style/XmCardRow"
+            android:orientation="vertical"
+            android:gravity="start"
             android:layout_marginBottom="@dimen/section_gap">
 
             <CheckBox
                 android:id="@+id/cb_serial_upload"
                 style="@style/XmCheckBox"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="@string/serial_upload"
                 android:textSize="@dimen/text_label" />
 
             <TextView
                 style="@style/XmTextCaption"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_gravity="center_vertical"
+                android:layout_marginTop="@dimen/space_4"
                 android:text="@string/serial_upload_hint" />
         </LinearLayout>
 
