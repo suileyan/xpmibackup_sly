@@ -22,8 +22,8 @@ android {
         // Android 9~10 的 legacy 存储权限分支已按 v0.9.1 决策移除（见 docs/ANDROID-VERSION-MATRIX.md）
         minSdk 30
         targetSdk 37
-        versionCode 900
-        versionName "0.9.0"
+        versionCode 10000
+        versionName "1.0.0"
     }
 
     // signingConfigs 必须在 buildTypes 之前声明（NEW-H-04）：

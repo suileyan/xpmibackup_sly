@@ -28,9 +28,23 @@ jobs:
         with:
           go-version: '1.22'
 
+      # 发布前先过质量门：格式/静态检查/单测全绿才允许产出 exe
+      # （磁盘预检 diskspace_*.go 是分平台 build tag，Windows 目标下只会编译 _windows.go，
+      #   而 go vet/test 会在本机 GOOS 上额外覆盖 unix 那份）
+      - name: Verify Go code (gofmt / vet / test)
+        run: |
+          cd pc
+          UNFORMATTED="$(gofmt -l .)"
+          if [ -n "$UNFORMATTED" ]; then
+            echo "::error::gofmt found unformatted files:"; echo "$UNFORMATTED"; exit 1
+          fi
+          go vet ./...
+          go test ./... -count=1
+
       - name: Build mibackpc.exe
         run: |
           cd pc
+          mkdir -p dist
           GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/mibackpc.exe .
           ls -la dist/
 

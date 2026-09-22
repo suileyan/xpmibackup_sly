@@ -33,10 +33,15 @@
 - 拦截 DFS 连接，模拟小米智能存储设备在线状态
 - 支持十一种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、123云盘（v0.9.5 起暂停支持）、天翼云盘（189）、百度网盘、联通沃盘
 - 备份至 PC：备份页自动扫描局域网 / USB 发现电脑端 mibackpc（`pc/` 目录），手机弹窗连接 + 电脑端确认配对，免手动填地址；连接成功后备份方式出现「备份至 PC」
+- **USB 通道优先（v1.0.0）**：电脑端在「设备在线但 `adb reverse` 未建立」时自动建通道；手机发现 `127.0.0.1` 应答即把方案切到 USB（仅当电脑名与已配对的一致，避免写到别的机器），拔线自动回落局域网，无需重新配对
 - 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/123/189/百度/沃盘）可并存，按需切换备份目标
 - 凭据加密存储：密码、Token、Cookie 经 AES-GCM 加密落盘，按账号隔离
 - 网盘 Token 自动刷新：光鸭 OAuth2 refresh_token 自动轮换；夸克 __puus 会话自动续期，401 自动重试；天翼 refreshToken 自动轮换 + accessToken 过期自愈
 - 大文件在 Cloud 层统一切片上传，十一种协议共用同一套切片逻辑
+- **手机端峰值占用可控（v1.0.0）**：切片前取「在途分片额度」（背压），磁盘分片锁死在 `(并发+2) × chunk_size`（默认 ≤640MB，逐项模式 ≤192MB）；不再整份复制源文件；分片落在模块专属目录 `AllBackupTemp/miback/`；进程异常退出留下的孤儿分片会在下次上传时自动清理（6 小时阈值，不误伤在途分片）
+- **实时上传速率（v1.0.0）**：备份页总进度条右侧显示每秒刷新的速率角标
+- **取消即停（v1.0.0）**：备份页取消后 1~2 秒内停止上传（最多再传完当前一片），且失败/取消一律不删本地源文件
+- **进度口径修正（v1.0.0）**：按宿主自己的分母折算上报，备份项进度不再是「贴住 30% 然后直接跳 100%」
 - 自动清理超出数量限制的旧备份
 - Android 11~17 适配：edge-to-edge（含底部导航栏 insets，仅 Android 15+ 强制）、Android 17 本地网络保护（SMB/WebDAV 专项提示）、static final 反射限制审计、配置变更行为兼容
 - Hook 跨版本兼容（HIGH-25）：小米备份类名/混淆方法名漂移时多候选自动降级 + 诊断日志，DFS AIDL transact code 漂移可观测
@@ -137,7 +142,10 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 切片逻辑统一在 `CloudFileHelp` 层，Provider 只处理整文件传输：
 
 - 文件大于 `chunk_size_mb` 时切片，生成 `原文件.part00000`、`原文件.part00001` … 和 `原文件.mibak.json` manifest
-- 上传失败时清理已上传的远端分片与残留 manifest，避免重试把旧分片当有效数据
+- **背压**：切分前先取「在途分片额度」（`Semaphore(并发+2)`），取不到就等——切分只是本地盘读写（数百 MB/s），上传要过网络（实测 ~39MB/s），不限流会把整个大项在几十秒内切成上百片堆在盘上
+- **分片目录**：`<AllBackupTemp>/miback/`（模块专属），不写在宿主备份目录里，避免宿主清理自身目录时连带清掉
+- 上传失败冻结时清理已上传的远端分片与残留 manifest，避免重试把旧分片当有效数据；**取消**时云端目录整体被删，跳过逐片清理（只刷 404）
+- **失败或取消不删本地源文件**：上传返回值参与 `auto_delete_local` 判定，避免"传失败还把本地备份删了"
 - 恢复时优先读 manifest 合并分片，manifest 不存在时按未切片的旧文件读取
 - manifest 含分片数 / 文件大小可信上限校验，防止远端恶意 manifest 导致异常
 
@@ -145,7 +153,7 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 
 ### 凭据加密存储（EncryptedCredStore）
 
-所有敏感凭据（密码、Token、Cookie、脚本正文）经 `EncryptedCredStore` 加密后落盘到 `/sdcard/MIUI/backup/creds.json`，明文不出现在 sdcard 上。
+所有敏感凭据（密码、Token、Cookie、脚本正文）经 `EncryptedCredStore` 加密后落盘到 `/sdcard/MIUI/backup/sly/creds.json`，明文不出现在 sdcard 上。
 
 | 维度     | 方案                                        |
 | ------ | ----------------------------------------- |
@@ -333,6 +341,10 @@ NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓�
 
 首次启动检测到旧 `config.ini` 含 `protocol` + `smb_*` / `webdav_*` / `custom_script_b64` 且无方案时，自动迁移为一条默认 NAS 方案并设为激活，敏感凭据迁入 EncryptedCredStore，升级无感。
 
+同时把散落在 `/sdcard/MIUI/backup/` 的模块文件（`config.ini`、`creds.json`、`profiles.json`、`cloud_accounts.json`、`backup_target.json`、`logs/`）整体迁入 `sly/` 子目录（rename 优先，跨进程幂等）。
+
+> **跨进程配置一致性**：UI 进程（模块 App / 设置页）与宿主进程（`com.miui.backup`）各自持有静态缓存，`invalidate()` 传不过去。方案文件的**修改时间 + 文件长度**一旦变化，两个进程都会整体丢弃自己的 Provider 缓存重建——所以「在 UI 里把电脑备份切到 USB」能立刻对宿主生效。
+
 ## 云端目录
 
 默认远端根目录 `MIUI/backup`，备份目录示例：
@@ -366,19 +378,26 @@ app/src/main/java/com/suileyan/
     ProgressCallback / ListenerProgressCallback  进度回调
     login/Yun139Login             139 登录与签名算法
   comm/                           文件操作门面与配置层
-    CloudFileHelp                 统一入口 + 切片 + AUTH_EXPIRED 重试
+    CloudFileHelp                 统一入口 + 切片（背压/取消/分片回收）+ AUTH_EXPIRED 重试
     SmbFileHelp / WebdavFileHelp  协议实现
     CustomHttpFileHelp            自定义 HTTP 脚本入口（Rhino 沙箱 v2 + ClassShutter）
-    ScriptFunctions               沙箱宿主函数库（29 个：加密/HTTP/文件/console/工具）
+    ScriptFunctions               沙箱宿主函数库（24+：加密/HTTP/文件/console/工具）
     ScriptWatchdog                沙箱指令计数超时保护（ContextFactory 30s deadline）
-    ConfigHelp                    全局配置读写
+    ConfigHelp                    全局配置读写 / sly 目录布局与旧文件迁移
+    LocalBackupFileHelp           宿主备份临时目录解析与模块临时区
+    PcDiscovery / PcPair          电脑端发现（USB 优先归一化）与配对
+    BackupCancel                  备份取消信号（按请求时刻判定，上传链路据此立即停）
+    TransferSpeed                 实时上传速率统计（进度页角标用）
+    Secp256k1                     PC 配对的 ECDH 曲线实现
     Async                         共享守护线程池
-    AtomicFile                    原子文件写入
+    AtomicFile                    原子文件写入（唯一临时名 + rename + 文件锁）
+    LogHelp / CrashLog            分段日志（主日志 + _err.log）与崩溃留痕
   xpmibackup/                     Xposed 模块入口与 Hook
     XposedEntry                   模块入口
     hook/
       AIDLHook                    DFS AIDL 重定向
-      BackupHook                  备份页面 / 通知 / 取消处理
+      BackupHook                  备份页面 / 通知 / 取消处理 / 进度口径与速率角标
+      ProgressSpeedBadge          进度页总进度条右侧的实时速率角标
       AutoBackupHook              自动备份调度
       SettingsHook                设置页入口注入
     ui/                           配置界面 Fragment
@@ -394,9 +413,12 @@ app/src/main/java/com/suileyan/
 | -------------------- | ------------------------------------------ |
 | `SettingsHook`       | 在设置 App 中注入配置入口，展示虚拟智能存储设备                 |
 | `AIDLHook`           | 模拟 DFS 服务连接，拦截上传、下载、目录查询，分发到 CloudFileHelp |
-| CloudFileHelp      | 统一分发十一种通道，处理跨协议切片与 AUTH_EXPIRED 重试          |
-| `BackupHook`         | 修正备份 App 页面、通知、进度焦点和取消清理                   |
+| CloudFileHelp      | 统一分发十一种通道，处理跨协议切片（背压 / 取消 / 分片回收）与 AUTH_EXPIRED 重试 |
+| `BackupHook`         | 修正备份 App 页面、通知、进度口径与焦点，取消清理，进度页速率角标         |
 | `AutoBackupHook`     | 接入备份 App 原生自动备份设置和调度链路                     |
+| `PcDiscovery`        | 电脑端发现（USB 条目优先归一化、按名同机校验）与配对               |
+| `BackupCancel`       | 备份取消信号（按请求时刻判定），上传链路据此立即停止              |
+| `TransferSpeed`      | 实时上传速率统计，供进度页角标显示                        |
 | `ProviderRegistry`   | 按备份目标（云盘账号优先，其次激活方案）取 Provider 实例          |
 | `EncryptedCredStore` | AES-GCM 加密凭据，按账号隔离，跨进程共享                   |
 
