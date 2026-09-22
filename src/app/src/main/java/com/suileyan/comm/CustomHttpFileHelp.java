@@ -248,13 +248,11 @@ public class CustomHttpFileHelp {
         builder.method(method, methodAllowsRequestBody(method) ? body : null);
         // spec 指定了自定义超时（httpRequest 的 connectTimeout/readTimeout/writeTimeout）时，基于共享 client 派生带超时的实例；
         // 网络拦截器（重定向 SSRF 二次校验）在 newBuilder 后保留（沙箱 v2）
+        // MED-30：派生实例按超时组合缓存复用——早期每次都 newBuilder().build()，
+        // 等于每个带超时的请求都新建一套连接池/线程池，连接复用完全失效
         var client = getClient();
         if (spec.connectTimeout != null || spec.readTimeout != null || spec.writeTimeout != null) {
-            var b = client.newBuilder();
-            if (spec.connectTimeout != null) b.connectTimeout(spec.connectTimeout, TimeUnit.SECONDS);
-            if (spec.readTimeout != null) b.readTimeout(spec.readTimeout, TimeUnit.SECONDS);
-            if (spec.writeTimeout != null) b.writeTimeout(spec.writeTimeout, TimeUnit.SECONDS);
-            client = b.build();
+            client = timeoutClient(spec);
         }
         var response = client.newCall(builder.build()).execute();
         var result = new ScriptResponse();
@@ -320,6 +318,43 @@ public class CustomHttpFileHelp {
         } catch (Exception e) {
             // 解析失败：fail-closed 拦截，不把未知地址放行给 OkHttp（NEW-M-09）
             throw new SecurityException("custom script target blocked: unresolvable host '" + host + "'");
+        }
+    }
+
+    /**
+     * SSRF 二次校验（HIGH-06）：checkUrlAllowed 在发请求前解析一次域名并判定私有段，
+     * 而 OkHttp 建连时会重新解析——攻击者控制的域名可以先返回公网地址通过校验、
+     * 再返回内网地址（DNS 重绑定 TOCTOU）。原网络拦截器只复核 URL 字符串，挡不住这类攻击。
+     *
+     * 网络拦截器位于 ConnectInterceptor 之后，chain.connection() 已是实际建立的连接。
+     * 对直连路由（Proxy.Type.DIRECT），socket 的远端地址就是目标主机的真实地址，据此判定即可闭环。
+     * 走代理时不判定远端地址（那是代理地址而非目标地址），退回 URL 层面的校验。
+     */
+    private static void checkConnectedAddress(okhttp3.Interceptor.Chain chain) {
+        if ("true".equalsIgnoreCase(ConfigHelp.getString("script_allow_private", "false"))) {
+            return;
+        }
+        try {
+            var conn = chain.connection();
+            if (conn == null) return;
+            var route = conn.route();
+            if (route == null || route.proxy() == null
+                    || route.proxy().type() != java.net.Proxy.Type.DIRECT) {
+                return;
+            }
+            var socket = conn.socket();
+            if (socket == null) return;
+            var addr = socket.getInetAddress();
+            if (addr != null && isBlockedAddress(addr)) {
+                throw new SecurityException("custom script target blocked: connected to private address "
+                        + addr.getHostAddress() + " (dns rebinding?)");
+            }
+        } catch (SecurityException e) {
+            LogHelp.e(TAG, e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            // 取不到连接信息时只记日志：URL 层校验已通过，此处属于加强项
+            LogHelp.d(TAG, "checkConnectedAddress skipped: " + e);
         }
     }
 
@@ -496,13 +531,48 @@ public class CustomHttpFileHelp {
         return out.toString();
     }
 
-    /** 将Java Map转成脚本可读取的普通对象 */
+    /**
+     * 将Java Map转成脚本可读取的普通对象。
+     *
+     * HIGH-05：绝不把宿主活 Java 对象注入脚本 scope——Context.javaToJS 会把 Map/List 包成
+     * NativeJavaObject（活引用），与本模块「scope 不放置任何 Java 实例」的沙箱假设直接矛盾：
+     * 当前 deny-all ClassShutter 下不能单独逃逸，但一旦 Shutter 出现绕过，持有活对象即升级为全逃逸。
+     * 这里把 Map/List/数组递归转换为纯脚本对象/数组，只保留标量走 javaToJS。
+     */
     private static Scriptable toNativeObject(Scriptable scope, Map<String, Object> map) {
         var obj = Context.getCurrentContext().newObject(scope);
         for (var entry : map.entrySet()) {
-            ScriptableObject.putProperty(obj, entry.getKey(), Context.javaToJS(entry.getValue(), scope));
+            ScriptableObject.putProperty(obj, entry.getKey(), toScriptValue(scope, entry.getValue()));
         }
         return obj;
+    }
+
+    /** 把 Java 值转成纯脚本值（Map→对象、Iterable/数组→数组、标量走 javaToJS） */
+    private static Object toScriptValue(Scriptable scope, Object value) {
+        var cx = Context.getCurrentContext();
+        if (value == null || value instanceof Scriptable) return value;
+        if (value instanceof Map) {
+            var obj = cx.newObject(scope);
+            for (var e : ((Map<?, ?>) value).entrySet()) {
+                ScriptableObject.putProperty(obj, String.valueOf(e.getKey()),
+                        toScriptValue(scope, e.getValue()));
+            }
+            return obj;
+        }
+        if (value instanceof Iterable || value instanceof Object[]) {
+            var items = new ArrayList<Object>();
+            if (value instanceof Iterable) {
+                for (var v : (Iterable<?>) value) items.add(v);
+            } else {
+                java.util.Collections.addAll(items, (Object[]) value);
+            }
+            var arr = cx.newArray(scope, items.size());
+            for (var i = 0; i < items.size(); i++) {
+                ScriptableObject.putProperty(arr, i, toScriptValue(scope, items.get(i)));
+            }
+            return arr;
+        }
+        return Context.javaToJS(value, scope);
     }
 
     /** 将脚本返回对象规整成内部HTTP请求描述 */
@@ -667,15 +737,44 @@ public class CustomHttpFileHelp {
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
+                // HIGH-04：callTimeout 约束「整次调用（含读 body）」的总时长。
+                // ScriptWatchdog 的指令计数只在 Rhino 解释器执行字节码时回调，
+                // 脚本一旦阻塞在 newCall(...).execute() 内就不再检查 deadline；
+                // slowloris 式慢速滴流（每次 read 都在 60s readTimeout 内、总时长无限）
+                // 能长期挂死备份线程。上限取脚本单次执行上限，与 MAX_SCRIPT_TIMEOUT_SECONDS 一致。
+                .callTimeout(MAX_SCRIPT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 // 网络拦截器在每次实际网络请求（含重定向链中的每次跳转）前执行，
-                // 对重定向目标同样做 SSRF 校验，防止公网服务器 302 到内网绕过（NEW-H-03）
+                // 对重定向目标同样做 SSRF 校验，防止公网服务器 302 到内网绕过（NEW-H-03）；
+                // 同时校验实际建连的对端 IP，闭合 DNS 重绑定的 TOCTOU 窗口（HIGH-06）
                 .addNetworkInterceptor(chain -> {
                     checkUrlAllowed(chain.request().url().toString());
+                    checkConnectedAddress(chain);
                     return chain.proceed(chain.request());
                 })
                 .build();
             return sClient;
         }
+    }
+
+    /** 带自定义超时的派生 client 缓存（MED-30） */
+    private static final Map<String, OkHttpClient> TIMEOUT_CLIENTS = new ConcurrentHashMap<>();
+    private static final int TIMEOUT_CLIENTS_MAX = 8;
+
+    /** 按超时组合派生并缓存 client：保持连接池复用，同时不丢失网络拦截器 */
+    private static OkHttpClient timeoutClient(RequestSpec spec) {
+        var key = spec.connectTimeout + "," + spec.readTimeout + "," + spec.writeTimeout;
+        var cached = TIMEOUT_CLIENTS.get(key);
+        if (cached != null) return cached;
+        var b = getClient().newBuilder();
+        if (spec.connectTimeout != null) b.connectTimeout(spec.connectTimeout, TimeUnit.SECONDS);
+        if (spec.readTimeout != null) b.readTimeout(spec.readTimeout, TimeUnit.SECONDS);
+        if (spec.writeTimeout != null) b.writeTimeout(spec.writeTimeout, TimeUnit.SECONDS);
+        var built = b.build();
+        if (TIMEOUT_CLIENTS.size() >= TIMEOUT_CLIENTS_MAX) {
+            TIMEOUT_CLIENTS.clear(); // 超时组合数量有限，超限即整体重置，避免无界增长
+        }
+        TIMEOUT_CLIENTS.put(key, built);
+        return built;
     }
 
     /** 构造传给脚本的基础上下文 */

@@ -468,8 +468,20 @@ public class AliDriveProvider implements CloudProvider {
     private JSONObject request(String path, JSONObject data) throws CloudException {
         var retriedRefresh = false;
         var retriedSession = false;
+        var lastCode = 0;
         for (var i = 0; i < MAX_RETRY; i++) {
-            var resp = httpPost(API_BASE + path, apiHeaders(), data);
+            HttpResponse resp;
+            try {
+                resp = httpPost(API_BASE + path, apiHeaders(), data);
+            } catch (CloudException e) {
+                // MED-08：网络抖动同样退避重试（与 Pan115/RetryPolicy 语义一致），最后一轮才上抛
+                if (e.kind() == CloudException.Kind.NETWORK && i < MAX_RETRY - 1) {
+                    backoff(i, path, "网络错误 " + e.getMessage());
+                    continue;
+                }
+                throw e;
+            }
+            lastCode = resp.code;
             var code = "";
             var message = "";
             if (resp.code < 500 && !resp.body.isEmpty()) {
@@ -480,7 +492,16 @@ public class AliDriveProvider implements CloudProvider {
                 } catch (Exception ignored) {
                 }
             }
-            var authExpired = resp.code == 401 || "AccessTokenInvalid".equals(code) || "IlegalToken".equals(code);
+            // MED-08：5xx 属可重试错误，此前首轮即抛且无退避
+            if (resp.code >= 500 && i < MAX_RETRY - 1) {
+                backoff(i, path, "HTTP " + resp.code);
+                continue;
+            }
+            // HIGH-03：官方错误码为 IllegalToken（两个 l）。历史实现只匹配 "IlegalToken"（少一个 l），
+            // 命中时 authExpired=false → 跳过 refreshAccessToken() 自愈，且 HTTP 200 让后面的
+            // 4xx/2xx 判定也放行，错误体被当成业务数据返回。这里两种拼写都接受。
+            var tokenInvalid = isIllegalToken(code);
+            var authExpired = resp.code == 401 || "AccessTokenInvalid".equals(code) || tokenInvalid;
             if (authExpired && !retriedRefresh) {
                 retriedRefresh = true;
                 LogHelp.i(TAG, "阿里云盘 token 失效，刷新重试: " + path);
@@ -501,6 +522,13 @@ public class AliDriveProvider implements CloudProvider {
                 throw new CloudException(CloudException.Kind.REMOTE,
                         "阿里云盘 API HTTP " + resp.code + " " + code + ": " + truncate(resp.body, 200));
             }
+            // HIGH-03：HTTP 200 + 已知错误码同样必须抛错。此前直接把错误体当成功返回，
+            // 调用方拿到没有 items 的 JSON 就当成"空结果"，症状是静默的空列表/缺文件。
+            if (isKnownErrorCode(code)) {
+                throw new CloudException(tokenInvalid ? CloudException.Kind.AUTH_EXPIRED : CloudException.Kind.REMOTE,
+                        "阿里云盘业务错误 code=" + code + " msg=" + message
+                                + " path=" + path + " raw=" + truncate(resp.body, 200));
+            }
             try {
                 // 部分端点（recyclebin/trash 等）成功时可能返回空 body
                 return resp.body.isBlank() ? new JSONObject() : new JSONObject(resp.body);
@@ -509,7 +537,38 @@ public class AliDriveProvider implements CloudProvider {
                         "阿里云盘响应非 JSON: " + truncate(resp.body, 200));
             }
         }
-        throw new CloudException(CloudException.Kind.REMOTE, "阿里云盘重试次数用尽: " + path);
+        throw new CloudException(CloudException.Kind.REMOTE,
+                "阿里云盘重试次数用尽: " + path + " lastHTTP=" + lastCode);
+    }
+
+    /** HIGH-03：官方错误码为 IllegalToken（两个 l），历史拼写 IlegalToken 也一并接受 */
+    private static boolean isIllegalToken(String code) {
+        return "IllegalToken".equalsIgnoreCase(code) || "IlegalToken".equalsIgnoreCase(code);
+    }
+
+    /** 明确属于错误的业务码（HTTP 200 也会出现）：命中即抛错，禁止把错误体当成功数据返回 */
+    private static final java.util.Set<String> KNOWN_ERROR_CODES = java.util.Set.of(
+            "TooManyRequests", "Throttling", "QuotaExhausted", "InternalError", "ServiceUnavailable",
+            "ParamError", "InvalidParameter", "Forbidden", "AccessTokenInvalid", "IllegalToken",
+            "IlegalToken", "DeviceSessionSignatureInvalid", "SignatureDoesNotMatch");
+
+    private static boolean isKnownErrorCode(String code) {
+        if (code == null || code.isEmpty()) return false;
+        if (KNOWN_ERROR_CODES.contains(code)) return true;
+        // 前缀型错误码（NotFound.File / ParamError.xxx / Forbidden.xxx）
+        return code.startsWith("NotFound.") || code.startsWith("ParamError.")
+                || code.startsWith("Forbidden.");
+    }
+
+    /** 退避等待（500ms 起指数增长，封顶 4s）；中断时复位中断标志避免取消信号丢失 */
+    private static void backoff(int attempt, String path, String why) {
+        var ms = Math.min(500L << Math.min(attempt, 3), 4000L);
+        LogHelp.w(TAG, "阿里云盘 " + why + "，退避 " + ms + "ms 后重试: " + path);
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** 注册设备公钥（首次签名 403/签名失效时触发，对齐 alist createSession） */

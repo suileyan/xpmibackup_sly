@@ -14,9 +14,13 @@
 - downloadFile(): GET 200 → 字节流
 - deleteDir(): DELETE 目录(带'/')，2xx/3xx 视为成功递归删除
 """
+import base64
 import io
+import json
+import os
 import re
 import sys
+import threading
 import urllib.request
 
 # Windows 控制台默认 GBK，脚本末尾的中文/符号输出会 UnicodeEncodeError 直接中断，
@@ -29,9 +33,26 @@ except Exception:
 # 本机回环不走系统代理（用户环境配置了 http_proxy，会把 127.0.0.1 打到代理上返回 502）
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-BASE = "http://127.0.0.1:18321"
-USER, PASS = "miback", "cdb6659ba5b8a68e"
-AUTH = "Basic " + __import__("base64").b64encode(f"{USER}:{PASS}".encode()).decode()
+
+def _default_pass():
+    """从同目录 mibackpc.json 读取密码，避免把凭据硬编码进脚本（NEW）"""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "mibackpc.json"),
+                  encoding="utf-8-sig") as f:
+            return json.load(f).get("pass", "")
+    except Exception:
+        return ""
+
+
+# 目标地址/凭据可通过命令行或环境变量注入（NEW：原先硬编码 18321 与明文密码）
+BASE = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("MIBACKPC_BASE", "http://127.0.0.1:18321")).rstrip("/")
+USER = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("MIBACKPC_USER", "miback")
+PASS = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("MIBACKPC_PASS", "") or _default_pass()
+if not PASS:
+    print("用法: python blackbox_test.py [base_url] [user] [pass]"
+          "（或设置 MIBACKPC_BASE / MIBACKPC_USER / MIBACKPC_PASS，或把 mibackpc.json 放在同目录）")
+    sys.exit(2)
+AUTH = "Basic " + base64.b64encode(f"{USER}:{PASS}".encode()).decode()
 
 HREF = re.compile(r"<\w*:?href>([^<]+)</\w*:?href>", re.I)
 LENGTH = re.compile(r"<\w*:?getcontentlength>(\d+)</\w*:?getcontentlength>", re.I)
@@ -88,7 +109,7 @@ for d in ["MIUI", backup_dir, ts_dir]:
 # 4) PUT：普通文件 + 中文文件名 + 分片命名 + manifest
 payload = bytes(range(256)) * 41  # 10496 bytes
 cn_name = "中文名 备份.bin"
-st, _ = req("PUT", BASE + "/dav/" + ts_dir.replace("/", "%2F") if False else BASE + "/dav/" + "/".join(enc(p) for p in ts_dir.split("/")) + "/" + enc(cn_name), payload,
+st, _ = req("PUT", BASE + "/dav/" + "/".join(enc(p) for p in ts_dir.split("/")) + "/" + enc(cn_name), payload,
             {"Content-Type": "application/octet-stream"})
 check("PUT 中文文件名 2xx", 200 <= st < 300, f"got {st}")
 
@@ -144,7 +165,7 @@ check("路径越界被拒绝", st in (403, 404), f"got {st}")
 # 9) 鉴权
 st, _ = req("PROPFIND", BASE + "/dav/", headers={"Depth": "0"}, auth=False)
 check("无凭据 PROPFIND 被拒 401", st == 401, f"got {st}")
-bad = "Basic " + __import__("base64").b64encode(b"miback:wrongpass").decode()
+bad = "Basic " + base64.b64encode(b"miback:wrongpass").decode()
 r = urllib.request.Request(BASE + "/dav/", method="PROPFIND")
 r.add_header("Authorization", bad)
 try:
@@ -164,6 +185,43 @@ check("删除后 PROPFIND 404", st == 404, f"got {st}")
 st, body = req("GET", BASE + "/api/state", auth=False)
 check("控制面 /api/state 本机可访问", st == 200, f"got {st}")
 check("控制面不下发内容给非预期路径", b"lanIPs" in body)
+
+# 12) 控制面防 CSRF / DNS 重绑定（HIGH-08）
+st, _ = req("POST", BASE + "/api/pair/decide", body=b'{"approve":false}', auth=False)
+check("控制面无自定义头 POST 被拒 403", st == 403, f"got {st}")
+st, _ = req("POST", BASE + "/api/pair/decide", body=b'{"approve":false}',
+            headers={"X-Mibackpc": "1"}, auth=False)
+check("控制面带自定义头 POST 通过", st in (200, 204), f"got {st}")
+st, _ = req("GET", BASE + "/api/state", headers={"Host": "evil.example.com"}, auth=False)
+check("控制面非回环 Host 被拒 403（DNS 重绑定）", st == 403, f"got {st}")
+
+# 13) 并发写同一目标不得产出混合内容（原子写 / 唯一临时文件名）
+conc_dir = backup_dir + "/conc_test"
+req("MKCOL", BASE + "/dav/" + enc(conc_dir) + "/")
+conc_url = BASE + "/dav/" + "/".join(enc(p) for p in (conc_dir + "/race.bin").split("/"))
+payloads = [bytes([65 + i]) * (4096 + i * 37) for i in range(8)]
+errs = []
+
+
+def _put(p):
+    try:
+        s, _ = req("PUT", conc_url, p, {"Content-Type": "application/octet-stream"})
+        if not (200 <= s < 300):
+            errs.append(f"http {s}")
+    except Exception as e:  # noqa: BLE001
+        errs.append(str(e))
+
+
+threads = [threading.Thread(target=_put, args=(p,)) for p in payloads]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+st, final = req("GET", conc_url)
+check("并发 PUT 全部返回 2xx", not errs, str(errs[:3]))
+check("并发 PUT 后内容为某一次写入的完整副本（无交错）", st == 200 and final in payloads,
+      f"st={st} len={len(final)}")
+req("DELETE", BASE + "/dav/" + "/".join(enc(p) for p in conc_dir.split("/")) + "/")
 
 print()
 if fails:

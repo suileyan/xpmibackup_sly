@@ -2,6 +2,7 @@ package com.suileyan.comm;
 
 import org.json.JSONObject;
 
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -180,10 +181,24 @@ public final class UpdateChecker {
             if (html.isEmpty()) {
                 html = RELEASE_PAGE_BASE + "/tag/" + tag;
             }
+            // MED-32：多资源 release（apk + zip 等）时 assets[0] 未必是 APK，
+            // 优先取名字以 .apk 结尾的资源，都没有才回退首个
             var dl = "";
             var assets = json.optJSONArray("assets");
-            if (assets != null && assets.length() > 0) {
-                dl = assets.optJSONObject(0).optString("browser_download_url", "");
+            if (assets != null) {
+                var first = "";
+                for (var i = 0; i < assets.length(); i++) {
+                    var a = assets.optJSONObject(i);
+                    if (a == null) continue;
+                    var assetUrl = a.optString("browser_download_url", "");
+                    if (assetUrl.isEmpty()) continue;
+                    if (first.isEmpty()) first = assetUrl;
+                    if (a.optString("name", "").toLowerCase(Locale.ROOT).endsWith(".apk")) {
+                        dl = assetUrl;
+                        break;
+                    }
+                }
+                if (dl.isEmpty()) dl = first;
             }
             var hasNew = compareVersions(version, currentVersion) > 0;
             return new Result(true, version, html, dl, hasNew);

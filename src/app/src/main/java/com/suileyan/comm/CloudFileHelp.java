@@ -85,21 +85,49 @@ public class CloudFileHelp {
     }
 
     /**
-     * 上传备份文件，并回调小米DFS传输进度
+     * 上传备份文件，并回调小米DFS传输进度（{@link #uploadWithProgress(String, Object, String, String, long)} 的便捷入口）
      */
-    public static void uploadWithProgress(String localPath, Object progressListener, String remoteDir, String taskId) {
+    public static boolean uploadWithProgress(String localPath, Object progressListener, String remoteDir, String taskId) {
+        return uploadWithProgress(localPath, progressListener, remoteDir, taskId,
+                android.os.SystemClock.elapsedRealtime());
+    }
+
+    /**
+     * 上传备份文件并回调进度，返回是否上传成功。
+     *
+     * 调用方必须按返回值决定能否删除本地源文件：原实现返回 void 且内部吞掉异常，
+     * 上传失败（或取消）后调用方仍当成功处理 —— 实测取消备份后本地微信备份被 "--auto_delete_local" 删掉。
+     *
+     * @param requestAt 宿主发起本次上传请求的时刻。取消备份（{@link com.suileyan.comm.BackupCancel}）后，
+     *                  早于取消时刻的请求不再产生新的上传动作并在分片间隙尽快中止
+     */
+    public static boolean uploadWithProgress(String localPath, Object progressListener, String remoteDir,
+                                             String taskId, long requestAt) {
+        if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+            LogHelp.i(TAG, "upload skipped (backup cancelled): " + localPath);
+            return false;
+        }
         var cb = progressListener != null ? new ListenerProgressCallback(progressListener) : null;
         try {
             var localFile = new File(localPath);
             if (shouldChunk(localFile.length())) {
-                uploadChunked(localFile, remoteDir, cb, taskId);
+                var result = uploadChunked(localFile, remoteDir, cb, taskId, requestAt);
+                if (result != null && result.startsWith(CANCELLED_RESULT)) {
+                    return false; // 中途被取消：不报完成，也不当成功
+                }
                 if (cb != null) cb.onFinish(taskId, 0, "success");
-            } else {
-                uploadSingleWithProgress(localPath, cb, remoteDir, taskId);
+            } else if (!uploadSingleWithProgress(localPath, cb, remoteDir, taskId, requestAt)) {
+                return false;
             }
+            return true;
         } catch (Exception e) {
+            if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+                LogHelp.i(TAG, "upload aborted by cancel: " + safeMsg(e));
+                return false;
+            }
             logError("uploadWithProgress failed [type=" + currentType() + "]", e);
             if (cb != null) cb.onFinish(taskId, -1, safeMsg(e));
+            return false;
         }
     }
 
@@ -353,19 +381,46 @@ public class CloudFileHelp {
 
     // ========== 通用切片 ==========
 
+    /** 分片上传被取消时的结果标记（调用方据此判定"没传成功"，绝不能当成功删本地源文件） */
+    public static final String CANCELLED_RESULT = "CANCELLED: ";
+
     /**
      * 通用切片上传：Cloud层生成part和manifest，底层协议只负责上传普通文件
      * 任一分片失败时清理已上传的远端分片与 manifest，避免下次重试把旧分片当有效数据（HIGH-11）
      */
     private static String uploadChunked(File localFile, String remoteDir, ProgressCallback cb, String taskId) throws Exception {
+        return uploadChunked(localFile, remoteDir, cb, taskId, android.os.SystemClock.elapsedRealtime());
+    }
+
+    /**
+     * 带取消除检查的分片上传。
+     *
+     * 宿主的取消只会收掉它自己的任务，这里必须自己看取消标记，否则取消后仍会把剩余分片
+     * 全部传完（实测微信 8.75GB 取消后继续传了二十多片，直到云端目录被删、PUT 报 500）。
+     * 检查点：造分片前、每个分片任务真正开始上传前、等分片时、写 manifest 前。
+     *
+     * @param requestAt 宿主发起本次上传请求的时刻
+     * @return 正常完成返回结果串；被取消返回以 {@link #CANCELLED_RESULT} 开头
+     */
+    private static String uploadChunked(File localFile, String remoteDir, ProgressCallback cb, String taskId,
+                                        long requestAt) throws Exception {
+        if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+            return CANCELLED_RESULT + "before chunking";
+        }
         if (!localFile.exists()) {
             throw new java.io.FileNotFoundException("file not found: " + localFile.getAbsolutePath());
         }
+        sweepOrphanPartsOnce();
         var fileSize = localFile.length();
         var chunkSize = chunkSizeBytes();
         var totalParts = Math.max(1L, (fileSize + chunkSize - 1L) / chunkSize);
         var remotePath = remotePath(remoteDir, localFile.getName());
-        var tempDir = localFile.getParentFile();
+        // 分片落盘到模块自己的目录，不写宿主 AllBackupTemp 数据目录：
+        // 宿主在项结束后会清空自己的目录，分片写在那里会被连带清掉；独立目录也便于异常中断后清理残留
+        var tempDir = chunkTempDir();
+        if (!tempDir.exists() && !tempDir.mkdirs() && !tempDir.exists()) {
+            throw new java.io.IOException("create chunk temp dir failed: " + tempDir.getAbsolutePath());
+        }
         var buffer = new byte[BUFFER_SIZE];
         var totalWritten = 0L;
 
@@ -374,15 +429,37 @@ public class CloudFileHelp {
         var partThreads = "on".equals(com.suileyan.comm.ConfigHelp.getString("serial_upload", "off"))
                 ? 1
                 : 8;
+        // 背压：在途分片（已切好、尚未传完）最多 partThreads + 2 片。
+        // 原实现把线程池的无界队列当缓冲，而切分只是本地盘读写（数百 MB/s）、上传要过网络（几十 MB/s），
+        // 于是 8.75GB 的项会在几十秒内被整份切成 140 片堆在盘上等上传 —— 手机端峰值占用凭空多出整整一份文件。
+        // 限流后磁盘上的分片稳定在 (partThreads+2)×chunkSize 以内（默认 10×64MiB≈640MB；逐项模式 3×64MiB）。
+        var inFlight = new java.util.concurrent.Semaphore(partThreads + 2);
         var executor = java.util.concurrent.Executors.newFixedThreadPool(partThreads);
         var futures = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+        // 本轮切出的分片文件清单：分片任务被 cancel 时它自己的 finally 不会执行，
+        // 必须靠这份清单兜底删除（否则失败后会在盘上留下排队中的整批分片）
+        var partFiles = new java.util.ArrayList<File>();
         var uploaded = new java.util.concurrent.atomic.AtomicLong(0L);
         try (var fis = new FileInputStream(localFile)) {
             for (var i = 0L; i < totalParts; i++) {
-                var partName = localFile.getName() + ".part" + partName(i);
-                var partFile = new File(tempDir, partName);
-                var remaining = Math.min(chunkSize, fileSize - totalWritten);
+                // 取消后的请求：不再造分片、不再提交（已提交的在分片任务里自行放弃）
+                if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+                    LogHelp.i(TAG, "chunked upload cancelled at part " + i + "/" + totalParts
+                            + ": " + localFile.getName());
+                    return CANCELLED_RESULT + "part " + i + "/" + totalParts;
+                }
+                // 背压等待期间同样响应取消，否则取消后要等一整批分片传完才能退出
+                if (!acquirePartSlot(inFlight, requestAt)) {
+                    LogHelp.i(TAG, "chunked upload cancelled while waiting part slot " + i + "/" + totalParts
+                            + ": " + localFile.getName());
+                    return CANCELLED_RESULT + "part " + i + "/" + totalParts;
+                }
+                var partFileName = localFile.getName() + ".part" + partName(i);
+                var partFile = new File(tempDir, partFileName);
+                partFiles.add(partFile);
+                var submitted = false;
                 try {
+                    var remaining = Math.min(chunkSize, fileSize - totalWritten);
                     try (var fos = new FileOutputStream(partFile)) {
                         while (remaining > 0) {
                             var read = fis.read(buffer, 0, (int) Math.min(buffer.length, remaining));
@@ -394,32 +471,46 @@ public class CloudFileHelp {
                             totalWritten += read;
                         }
                     }
-                } catch (Exception e) {
-                    deleteTempFile(partFile);
-                    throw e;
-                }
-                final var partSize = partFile.length();
-                futures.add(executor.submit(() -> {
-                    try {
-                        var uploadResult = uploadSingle(partFile.getAbsolutePath(), remoteDir);
-                        if (uploadResult != null && uploadResult.startsWith("ERROR:")) {
-                            throw new IllegalStateException(uploadResult);
+                    final var partSize = partFile.length();
+                    futures.add(executor.submit(() -> {
+                        try {
+                            // 排队期间备份被取消：直接放弃这一片（此时上传只会白跑，云端目录正在被删）
+                            if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+                                return;
+                            }
+                            var uploadResult = uploadSingle(partFile.getAbsolutePath(), remoteDir);
+                            if (uploadResult != null && uploadResult.startsWith("ERROR:")) {
+                                throw new IllegalStateException(uploadResult);
+                            }
+                            if (cb != null) cb.onProgress(taskId, uploaded.addAndGet(partSize), fileSize);
+                        } catch (Exception ex) {
+                            // submit(Runnable) 不能抛检查异常，包装为 CompletionException，外层 f.get() 解包
+                            throw new java.util.concurrent.CompletionException(ex);
+                        } finally {
+                            // 分片传完（或放弃）立刻删除：磁盘占用只跟"在途分片数"有关，不跟文件大小有关
+                            deleteTempFile(partFile);
+                            inFlight.release();
                         }
-                        if (cb != null) cb.onProgress(taskId, uploaded.addAndGet(partSize), fileSize);
-                    } catch (Exception ex) {
-                        // submit(Runnable) 不能抛检查异常，包装为 CompletionException，外层 f.get() 解包
-                        throw new java.util.concurrent.CompletionException(ex);
-                    } finally {
+                    }));
+                    submitted = true;
+                } finally {
+                    // 切分或提交失败：这一片没进线程池，自己删掉并归还背压额度
+                    if (!submitted) {
                         deleteTempFile(partFile);
+                        inFlight.release();
                     }
-                }));
+                }
             }
         } catch (Exception e) {
             // 切分/提交异常：取消未完成分片并清理已上传的远端分片
             for (var f : futures) {
                 f.cancel(true);
             }
-            cleanupRemoteChunks(remoteDir, localFile.getName(), totalParts);
+            deletePartFiles(partFiles);
+            // 取消场景下云端目录正在被整体删除，逐片清理只会刷 404，跳过
+            if (!com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+                cleanupRemoteChunks(remoteDir, localFile.getName(), totalParts);
+            }
             throw e;
         } finally {
             executor.shutdown();
@@ -430,7 +521,10 @@ public class CloudFileHelp {
                 f.get();
             }
         } catch (Exception e) {
-            cleanupRemoteChunks(remoteDir, localFile.getName(), totalParts);
+            deletePartFiles(partFiles);
+            if (!com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+                cleanupRemoteChunks(remoteDir, localFile.getName(), totalParts);
+            }
             if (e instanceof java.util.concurrent.ExecutionException ee && ee.getCause() != null) {
                 var cause = ee.getCause();
                 while (cause instanceof java.util.concurrent.CompletionException ce && ce.getCause() != null) {
@@ -442,6 +536,11 @@ public class CloudFileHelp {
                 throw new IllegalStateException(cause);
             }
             throw new IllegalStateException(e);
+        }
+
+        // 取消后不再补 manifest（云端目录正在被删，补了也是残留）
+        if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+            return CANCELLED_RESULT + "before manifest";
         }
 
         var manifest = new JSONObject();
@@ -466,6 +565,8 @@ public class CloudFileHelp {
             throw e;
         } finally {
             deleteTempFile(manifestFile);
+            // 刻意不清理空的分片目录：并发上传多项时，"本项刚删完最后一片"与"另一项正要写 manifest"
+            // 之间存在窗口，删目录会让对方写文件失败。留一个空目录无成本，下次上传直接复用。
         }
         return "OK: " + remotePath + " (" + fileSize + " bytes, chunked)";
     }
@@ -634,15 +735,24 @@ public class CloudFileHelp {
         }
     }
 
-    /** 上传单个普通文件，并交给底层协议回调细粒度进度；登录态过期时 refresh 后重试一次 */
-    private static void uploadSingleWithProgress(String localPath, ProgressCallback cb, String remoteDir, String taskId) throws Exception {
+    /**
+     * 上传单个普通文件，并交给底层协议回调细粒度进度；登录态过期时 refresh 后重试一次。
+     * 返回是否上传成功（取消后返回 false，调用方不得据此删除本地源文件）。
+     */
+    private static boolean uploadSingleWithProgress(String localPath, ProgressCallback cb, String remoteDir,
+                                                    String taskId, long requestAt) throws Exception {
+        if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+            LogHelp.i(TAG, "single upload skipped (backup cancelled): " + localPath);
+            return false;
+        }
         var provider = currentProvider();
         try {
             provider.uploadWithProgress(localPath, cb, remoteDir, taskId);
+            return true;
         } catch (CloudException e) {
             if (e.isAuthExpired() && provider.refresh()) {
                 provider.uploadWithProgress(localPath, cb, remoteDir, taskId);
-                return;
+                return true;
             }
             throw e;
         }
@@ -741,6 +851,100 @@ public class CloudFileHelp {
         return String.format(java.util.Locale.ROOT, "%05d", index);
     }
 
+    /**
+     * 分片落盘目录：{@code <AllBackupTemp>/miback/}（模块自管，与宿主数据目录分离）。
+     * 分片是"边切边传、传完即删"的，放在这里既不会被宿主清理自己的备份目录时误删，
+     * 也便于上传异常中断后统一清理残留分片。
+     */
+    private static File chunkTempDir() {
+        return new File(new File(com.suileyan.comm.LocalBackupFileHelp.TEMP_BACKUP_ROOT), "miback");
+    }
+
+    /** 遗留分片判定阈值：6 小时没被动过才算孤儿（正常一次上传最长也就几十分钟） */
+    private static final long ORPHAN_PART_IDLE_MS = 6L * 60 * 60 * 1000L;
+    private static volatile boolean orphanSwept = false;
+
+    /**
+     * 清理上次异常中断（进程被杀 / 上传失败）遗留的分片与临时清单。
+     *
+     * 分片是"边切边传、传完即删"的，正常路径不残留；但进程被杀时磁盘上会留下一整批分片
+     * （实测取消一次微信备份残留 97 片 ≈ 6.36GB，直接把手机端可用空间吃掉一大块）。
+     * 这里只删 6 小时以上没动过的 {@code *.partNNNNN} / {@code *.mibak.json}，
+     * 绝不会碰到正在上传的分片；每个进程生命周期最多全量扫一次。
+     */
+    private static void sweepOrphanPartsOnce() {
+        if (orphanSwept) {
+            return;
+        }
+        orphanSwept = true;
+        try {
+            var cutoff = System.currentTimeMillis() - ORPHAN_PART_IDLE_MS;
+            var root = new File(com.suileyan.comm.LocalBackupFileHelp.TEMP_BACKUP_ROOT);
+            var count = sweepOrphanParts(root, cutoff, false);
+            // 顺带收掉被清空的分片目录（miback 空了就删，不会碰到宿主目录）
+            com.suileyan.comm.LocalBackupFileHelp.deleteEmptyDirsUntilTempRoot(new File(root, "miback"));
+            if (count > 0) {
+                LogHelp.i(TAG, "清理遗留分片/临时文件 " + count + " 个（上次异常中断残留）");
+            }
+        } catch (Exception e) {
+            LogHelp.w(TAG, "sweep orphan parts failed", e);
+        }
+    }
+
+    /**
+     * 递归清理孤儿临时文件，返回删除个数；目录不可读时静默跳过。
+     *
+     * @param moduleOwned 当前目录是否位于模块专属临时区（{@code AllBackupTemp/miback}）之下。
+     *                    模块目录里的文件都是上传中间产物（分片、fd 落盘副本），超时一律可删；
+     *                    其余位置只认分片/manifest 的固定命名，避免误删宿主的备份数据
+     */
+    private static int sweepOrphanParts(File dir, long cutoff, boolean moduleOwned) {
+        var children = dir.listFiles();
+        if (children == null) {
+            return 0;
+        }
+        var removed = 0;
+        for (var child : children) {
+            if (child.isDirectory()) {
+                removed += sweepOrphanParts(child, cutoff, moduleOwned || "miback".equals(child.getName()));
+                continue;
+            }
+            var name = child.getName();
+            // 模块专属目录内都是上传中间产物（分片、fd 落盘副本），超时即可删；
+            // 模块目录之外只认「本模块生成过的确切命名」，避免误删宿主的备份数据：
+            //   - 分片：<源文件名>.partNNNNN，源文件必然是宿主的 *.bak 备份文件
+            //   - manifest：<源文件名>.mibak.json（".mibak" 是本模块专有后缀）
+            // 单靠 "*.partNNNNN" 不够：宿主自己也可能有同风格临时文件，6h 阈值挡不住
+            // "宿主一个跑了一晚上的大项"，所以额外要求带 .bak 源文件标记。
+            var orphan = moduleOwned
+                    || (PART_FILE_PATTERN.matcher(name).matches() && name.contains(".bak.part"))
+                    || name.endsWith(MANIFEST_SUFFIX);
+            if (orphan && child.lastModified() < cutoff && child.delete()) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    /**
+     * 取一个「在途分片」额度（背压），取不到就等；等待期间响应备份取消。
+     *
+     * @return true 已取到额度；false 表示备份已取消或线程被中断，调用方应立刻停止切分
+     */
+    private static boolean acquirePartSlot(java.util.concurrent.Semaphore slots, long requestAt) {
+        try {
+            while (!slots.tryAcquire(200, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     /** 拷贝流内容，调用方负责关闭输入输出流 */
     private static void streamCopy(java.io.InputStream in, java.io.OutputStream out) throws Exception {
         var buffer = new byte[BUFFER_SIZE];
@@ -748,6 +952,23 @@ public class CloudFileHelp {
         while ((len = in.read(buffer)) != -1) {
             out.write(buffer, 0, len);
         }
+    }
+
+    /**
+     * 删除本轮切出的分片文件（失败/取消兜底）。
+     *
+     * 分片任务正常结束时会在自己的 finally 里删片，但被 {@code Future.cancel} 取消、
+     * 尚未开始执行的任务不会走 finally —— 依赖它就会像旧实现一样在盘上留下整批分片。
+     * 已经删掉的文件这里再删是 no-op。
+     */
+    private static void deletePartFiles(java.util.List<File> partFiles) {
+        if (partFiles == null || partFiles.isEmpty()) {
+            return;
+        }
+        for (var file : partFiles) {
+            deleteTempFile(file);
+        }
+        partFiles.clear();
     }
 
     /** 删除临时切片文件，失败时只记录日志 */

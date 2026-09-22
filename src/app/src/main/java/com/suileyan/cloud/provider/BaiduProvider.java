@@ -28,7 +28,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.zip.CRC32;
 
 import okhttp3.FormBody;
 import okhttp3.HttpUrl;
@@ -194,18 +193,41 @@ public class BaiduProvider implements CloudProvider {
         return findChild(dir, targetName);
     }
 
-    /** 建目录；errno 31061（已存在）幂等忽略，返回目标绝对路径
-     * 参数对齐百度网页版：a=commit + path（完整目标路径）+ type=1（目录），
-     * 不传 isdir（实测多传 isdir=1 触发 errno=2 参数错误——百度 /api/create 创建目录不认该字段） */
+    /**
+     * 建目录，返回**服务端确认存在**的绝对路径。
+     *
+     * 参数按百度官方 create 接口规范：`path` + `isdir=1`（标记目录）+ `block_list=[]`。
+     * 旧实现传的是 `type=1` —— 该字段不在接口定义里，服务端直接忽略，
+     * 于是出现"接口返回了 errno=10、我们当成'已存在'放行，但目录其实没建成"：
+     * 紧接着 list 该路径就报 `errno=-9`（文件或目录不存在），整项备份失败（真机实测每次备份都中）。
+     *
+     * 官方错误码：-7 名称错误/无权访问、-8 已存在、-10 容量已满。
+     * 因为不同端点对"已存在"的 errno 语义不一致，这里不靠 errno 判断成败，
+     * 而是**创建后回查一次**：查不到就显式抛错，避免把问题拖到后面变成难以定位的 -9。
+     */
     private String createFolder(String dirPath, String name) throws CloudException {
         var target = joinPath(dirPath, name);
         var form = new LinkedHashMap<String, String>();
         form.put("a", "commit");
-        form.put("type", "1");
         form.put("path", target);
+        form.put("isdir", "1");
+        form.put("block_list", "[]");
+        // rtype=0：path 冲突时直接返回冲突而不是自动重命名
+        // （默认 1 会在目录已存在时建出 "MIUI(1)" 这种重复目录，配合下面的已存在幂等处理才是安全的）
+        form.put("rtype", "0");
         var json = apiPost("create", form);
-        // 其余非 0 errno 已在 parseApiResponse 抛出
-        return target;
+        // 回查校验（list 本身可能抛 -9，这里降级为告警，由下面的判定统一报错）
+        Item created = null;
+        try {
+            created = findChild(dirPath, name);
+        } catch (CloudException e) {
+            LogHelp.w(TAG, "百度建目录后回查失败: " + target, e);
+        }
+        if (created == null || !created.isDir) {
+            throw new CloudException(CloudException.Kind.REMOTE,
+                    "百度创建目录后仍不可见: " + target + " resp=" + truncate(json.toString(), 200));
+        }
+        return created.path != null && !created.path.isEmpty() ? created.path : target;
     }
 
     /** 解析路径为绝对路径（根 "/"）；createMissing=true 自动建目录；缺失返回 null */
@@ -464,10 +486,15 @@ public class BaiduProvider implements CloudProvider {
         throw last != null ? last : new CloudException(CloudException.Kind.REMOTE, "百度分片上传失败 partseq=" + partseq);
     }
 
-    /** 单遍流式计算：全文件 MD5 + CRC32 + 4MB 块 MD5；sliceMd5 独立读取前 256KB */
+    /**
+     * 单遍流式计算：4MB 块 MD5（precreate/upload 的 block_list 唯一真正需要的产物）。
+     *
+     * NEW：全文件 MD5 / slice-md5 / content-crc32 曾在此计算，但三个字段赋值后从未被读取——
+     * 唯一的消费者 rapidupload 旧接口已被百度限制（errno=2，见上方注释），秒传检测统一走 precreate。
+     * 保留它们会让每次上传白白多算一遍全文件 MD5 + CRC32（GB 级文件是秒级 CPU）并多读 256KB，
+     * 因此移除。若将来重新启用 rapidupload，需要在此恢复这三项计算。
+     */
     private static FileHashes computeHashes(File file, long size) throws Exception {
-        var fullMd5 = MessageDigest.getInstance("MD5");
-        var crc = new CRC32();
         var chunks = new ArrayList<String>();
         var chunkHash = MessageDigest.getInstance("MD5");
         var inChunk = 0L;
@@ -475,8 +502,6 @@ public class BaiduProvider implements CloudProvider {
         try (var in = new FileInputStream(file)) {
             var read = 0;
             while ((read = in.read(buffer)) != -1) {
-                fullMd5.update(buffer, 0, read);
-                crc.update(buffer, 0, read);
                 chunkHash.update(buffer, 0, read);
                 inChunk += read;
                 if (inChunk >= BLOCK_SIZE) {
@@ -489,26 +514,7 @@ public class BaiduProvider implements CloudProvider {
                 chunks.add(hexLower(chunkHash.digest()));
             }
         }
-        // slice-md5：前 256KB（不足则全文件）
-        var slice = MessageDigest.getInstance("MD5");
-        var sliceLen = (int) Math.min(256L * 1024, size);
-        if (sliceLen > 0) {
-            try (var in = new FileInputStream(file)) {
-                var buf2 = new byte[BUFFER_SIZE];
-                var remaining = sliceLen;
-                while (remaining > 0) {
-                    var r = in.read(buf2, 0, (int) Math.min(buf2.length, remaining));
-                    if (r == -1) break;
-                    slice.update(buf2, 0, r);
-                    remaining -= r;
-                }
-            }
-        }
         var h = new FileHashes();
-        h.contentMd5 = hexLower(fullMd5.digest());
-        h.sliceMd5 = hexLower(slice.digest());
-        // content-crc32：无符号十进制（校准点：rapidupload 若稳定 31079 且 md5 正确，改 "0x%x" hex 格式）
-        h.contentCrc32 = String.valueOf(crc.getValue());
         h.chunkMd5s = chunks;
         return h;
     }
@@ -751,9 +757,10 @@ public class BaiduProvider implements CloudProvider {
                 throw new CloudException(CloudException.Kind.REMOTE,
                         "百度操作触发安全验证(errno=132)，建议在网页端手动处理");
             }
-            if (errno == 31079 || errno == 31061 || errno == 31081 || errno == 31363 || errno == 10) {
-                // 秒传未命中 / 已存在幂等 / 整文件重传 / 目录或文件已存在（/api/create 对已存在目录返回 errno=10）：
-                // 由调用方特判；errno=10 打调用栈便于确认出现位置（precreate 出现则 uploadId 缺失会显式抛错）
+            if (errno == 31079 || errno == 31061 || errno == 31081 || errno == 31363 || errno == 10 || errno == -8) {
+                // 秒传未命中 / 已存在幂等 / 整文件重传 / 目录或文件已存在：
+                // 31061/10 与 -8 都是不同端点的"已存在"表达，由调用方特判；
+                // errno=10 打调用栈便于确认出现位置（precreate 出现则 uploadId 缺失会显式抛错）
                 if (errno == 10) {
                     LogHelp.w(TAG, "百度 errno=10（已存在），stack=" + stackTop(5));
                 }
@@ -932,9 +939,6 @@ public class BaiduProvider implements CloudProvider {
     // ========== 内部模型 ==========
 
     private static class FileHashes {
-        String contentMd5 = "";
-        String sliceMd5 = "";
-        String contentCrc32 = "";
         List<String> chunkMd5s = new ArrayList<>();
     }
 

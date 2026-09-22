@@ -173,6 +173,31 @@ public class WebViewLoginFragment extends Fragment {
     private Button btnDone;
     private String provider = PROVIDER_139;
 
+    /**
+     * 主文档请求头：强制绕过 HTTP 缓存。
+     *
+     * SPA 首页引用的 JS/CSS 带构建 hash，站点发新版后旧 hash 的资源会下线、路径被回退成 index.html。
+     * 客户端一旦拿到过期的首页（CDN 边缘节点缓存或本地启发式缓存），就会去请求那些已下线的资源，
+     * 拿回一整页 HTML 被当作 JS 解析：
+     *   Uncaught SyntaxError: Unexpected token '<'
+     * → SPA 起不来，整页白屏只剩背景图。实测联通沃盘 pan.wo.cn（缓存 app.79546be6….js，
+     * 服务端只存在 app.415ca56a….js，旧路径全部返回 text/html）。
+     */
+    private final java.util.Map<String, String> noCacheHeaders = new java.util.HashMap<>();
+
+    /** 白屏自愈是否已用过（每次加载重置，避免反复重载） */
+    private boolean blankRetried;
+
+    /**
+     * 待执行的白屏检查。
+     *
+     * 必须持有引用：延迟回调里捕获的 url 是「调度那一刻的页面」，期间用户可能已经返回、
+     * 换 provider、或页面自己跳转（SPA 路由）。既要在新加载时取消旧回调，
+     * 也要在执行时二次确认 WebView 当前仍在同一个地址，否则会把「已经离开的页面」
+     * 用旧 url 重新加载回来（表现为莫名跳回上一个网盘的登录页）。
+     */
+    private Runnable pendingBlankCheck;
+
     // ---- 139 捕获状态 ----
     private volatile String capturedAuth = "";
     private volatile boolean authFromRequest = false;
@@ -372,10 +397,11 @@ public class WebViewLoginFragment extends Fragment {
                 LogHelp.web("PAGE_FINISH " + stripQuery(url));
                 // 再次注入：防页面脚本/SPA 重写 viewport；随后兜底扫描 localStorage
                 injectDesktopMode(view);
+                scheduleBlankCheck(view, url);
                 if (PROVIDER_GUANGYA.equals(provider)) {
                     view.evaluateJavascript(EXTRACT_JS_GUANGYA, value -> {
                         if (value != null && value.contains("|||")) {
-                            var cleaned = value.replace("\"", "");
+                            var cleaned = unescapeJsString(value);
                             var parts = cleaned.split("\\|\\|\\|");
                             // 约定格式 "access|||refresh"，refresh 在 parts[1]（NEW-H-02）
                             if (parts.length >= 2) {
@@ -406,7 +432,7 @@ public class WebViewLoginFragment extends Fragment {
                     // 123云盘：localStorage/sessionStorage 兜底扫描（主通道是请求头拦截）
                     view.evaluateJavascript(EXTRACT_JS_123, value -> {
                         if (value != null && !"null".equals(value)) {
-                            var cleaned = value.replace("\"", "").trim();
+                            var cleaned = unescapeJsString(value).trim();
                             if (cleaned.length() > 20 && cleaned.length() > captured123Bearer.length()) {
                                 captured123Bearer = cleaned;
                                 LogHelp.i(TAG, "123云盘 localStorage 提取到 token, len=" + cleaned.length());
@@ -425,7 +451,7 @@ public class WebViewLoginFragment extends Fragment {
                     // 沃盘：主通道是 dispatcher 请求头拦截；此处 localStorage 兜底扫 access/refresh token
                     view.evaluateJavascript(EXTRACT_JS_WO, value -> {
                         if (value != null && value.contains("|||")) {
-                            var cleaned = value.replace("\"", "");
+                            var cleaned = unescapeJsString(value);
                             var parts = cleaned.split("\\|\\|\\|");
                             if (parts.length >= 2) {
                                 var at = parts[0].trim();
@@ -453,7 +479,7 @@ public class WebViewLoginFragment extends Fragment {
                             var idx = value.indexOf("Basic");
                             if (idx < 0) idx = value.indexOf("basic");
                             if (idx >= 0) {
-                                var v = value.substring(idx + 5).replace("\"", "").trim();
+                                var v = unescapeJsString(value.substring(idx + 5));
                                 if (!v.isEmpty()) {
                                     capturedAuth = v;
                                 }
@@ -464,14 +490,23 @@ public class WebViewLoginFragment extends Fragment {
             }
         });
 
-        webView.loadUrl(PROVIDER_GUANGYA.equals(provider) ? URL_GUANGYA
+        var loginUrl = PROVIDER_GUANGYA.equals(provider) ? URL_GUANGYA
                 : PROVIDER_QUARK.equals(provider) ? URL_QUARK
                 : PROVIDER_123.equals(provider) ? URL_123
                 : PROVIDER_189.equals(provider) ? URL_189
                 : PROVIDER_BAIDU.equals(provider) ? URL_BAIDU
                 : PROVIDER_WO.equals(provider) ? URL_WO
                 : PROVIDER_115.equals(provider) ? URL_115
-                : PROVIDER_ALIYUN.equals(provider) ? URL_ALIYUN : URL_139);
+                : PROVIDER_ALIYUN.equals(provider) ? URL_ALIYUN : URL_139;
+
+        // 主文档强制绕过 HTTP 缓存（字段注释里有完整成因），并重置白屏自愈标记
+        noCacheHeaders.clear();
+        noCacheHeaders.put("Cache-Control", "no-cache");
+        noCacheHeaders.put("Pragma", "no-cache");
+        blankRetried = false;
+        cancelPendingBlankCheck();
+        LogHelp.web("LOAD " + stripQuery(loginUrl) + " (no-cache)");
+        webView.loadUrl(loginUrl, noCacheHeaders);
 
         // 返回键：优先让 WebView 后退
         view.setFocusableInTouchMode(true);
@@ -623,6 +658,84 @@ public class WebViewLoginFragment extends Fragment {
         view.evaluateJavascript(DESKTOP_FIX_JS, null);
     }
 
+    /**
+     * 白屏自愈：等页面渲染完再看一眼有没有内容，什么都没有就用带 cache-buster 的 URL 重载一次。
+     *
+     * 补的是"主文档禁缓存"管不到的那一层 —— CDN 边缘节点自己的 HTML 缓存。
+     * 实测 pan.wo.cn 的首页响应没有任何 Cache-Control，被 CDN 缓存了 7 天以上
+     * （`X-Cache-Lookup: Cache Hit` / `Age: 637498`），且不同节点内容不一致：
+     * 手机命中的节点给的是更早版本 HTML，其中引用的 JS 早已下线，请求回来的是首页 HTML，
+     * 浏览器当 JS 解析 → `Unexpected token '<'` → 整页只剩背景图。
+     * 给 URL 加一个一次性查询参数可让 CDN 缓存键改变、强制回源，拿到当前版本。
+     * 只重试一次，避免在彻底不可用时反复重载。
+     */
+    private void scheduleBlankCheck(WebView view, String url) {
+        if (blankRetried || url == null || url.isEmpty()) {
+            return;
+        }
+        cancelPendingBlankCheck();
+        var task = (Runnable) () -> {
+            pendingBlankCheck = null;
+            if (getActivity() == null || view != webView) {
+                return;
+            }
+            // 二次确认：调度之后页面可能已经跳转/被替换，此时用旧 url 重载会把用户拽回上一页
+            var current = view.getUrl();
+            if (current == null || !stripQuery(current).equals(stripQuery(url))) {
+                return;
+            }
+            view.evaluateJavascript(
+                    "(function(){var r=document.getElementById('app')||document.getElementById('root')||document.body;"
+                            + "if(!r||!r.innerText)return 0;return r.innerText.trim().length;})()",
+                    value -> {
+                        if (blankRetried || getActivity() == null) {
+                            return;
+                        }
+                        var contentLength = jsInt(value);
+                        // -1 = 拿不到结果（页面正在销毁/回调返回 null），属"未知"而非"白屏"：
+                        // 不重载，避免误判导致的额外跳转
+                        if (contentLength != 0) {
+                            return;
+                        }
+                        // 重载前再确认一次地址（evaluateJavascript 是异步的，期间仍可能跳转）
+                        var nowUrl = view.getUrl();
+                        if (nowUrl == null || !stripQuery(nowUrl).equals(stripQuery(url))) {
+                            return;
+                        }
+                        blankRetried = true;
+                        // 本地缓存里那份首页可能正是已下线的版本，先清掉再重载（只在白屏时发生，代价可接受）
+                        view.clearCache(true);
+                        var sep = url.contains("?") ? "&" : "?";
+                        var retryUrl = url + sep + "miback_reload=" + System.currentTimeMillis();
+                        LogHelp.web("BLANK page detected, reload with cache-buster: " + stripQuery(retryUrl));
+                        view.loadUrl(retryUrl, noCacheHeaders);
+                    });
+        };
+        pendingBlankCheck = task;
+        view.postDelayed(task, 1500);
+    }
+
+    /** 取消尚未执行的白屏检查（重新加载 / 离开页面时调用，防止旧回调重载过期地址） */
+    private void cancelPendingBlankCheck() {
+        var task = pendingBlankCheck;
+        pendingBlankCheck = null;
+        if (task != null && webView != null) {
+            webView.removeCallbacks(task);
+        }
+    }
+
+    /** 解析 evaluateJavascript 的返回（数字是裸值，异常/空返回 -1） */
+    private static int jsInt(String raw) {
+        if (raw == null) {
+            return -1;
+        }
+        try {
+            return (int) Double.parseDouble(raw.replace("\"", "").trim());
+        } catch (Throwable e) {
+            return -1;
+        }
+    }
+
     /** 是否为页面 URL（路径最后一段无文件扩展名，或 .html/.htm） */
     private static boolean isHtmlPage(String url) {
         try {
@@ -634,6 +747,66 @@ public class WebViewLoginFragment extends Fragment {
             return true;
         }
     }
+
+    /**
+     * 反转义 evaluateJavascript 回调返回的 JS 字符串字面量（MED-23）。
+     * WebView 回调给的是 JS 源码形式的字符串（含外层引号与反斜杠转义序列），
+     * 早期实现只做 replace("\"","")：token 含引号/反斜杠/换行/非 ASCII 时会被截断或污染，
+     * 且非 ASCII 字符会以转义序列原样入库，导致后续请求头带上错误凭据。
+     */
+    private static String unescapeJsString(String raw) {
+        if (raw == null) return "";
+        var s = raw.trim();
+        if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
+            s = s.substring(1, s.length() - 1);
+        }
+        var out = new StringBuilder(s.length());
+        for (var i = 0; i < s.length(); i++) {
+            var c = s.charAt(i);
+            if (c != '\\' || i + 1 >= s.length()) {
+                out.append(c);
+                continue;
+            }
+            var n = s.charAt(++i);
+            switch (n) {
+                case 'n': out.append('\n'); break;
+                case 'r': out.append('\r'); break;
+                case 't': out.append('\t'); break;
+                case 'b': out.append('\b'); break;
+                case 'f': out.append('\f'); break;
+                case 'u':
+                    if (i + 4 < s.length()) {
+                        try {
+                            out.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16));
+                            i += 4;
+                        } catch (Exception e) {
+                            out.append(n);
+                        }
+                    } else {
+                        out.append(n);
+                    }
+                    break;
+                default:
+                    out.append(n); // \" \\ \/ 等
+                    break;
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * 登记校验线程（MED-25）：onDone* 里的 new Thread 闭包持有 Fragment 与 btnDone，
+     * 视图销毁后若线程仍在跑会延迟回收。统一登记，onDestroyView 时中断。
+     */
+    private Thread registerWorker(Thread t) {
+        t.setDaemon(true);
+        workers.add(t);
+        return t;
+    }
+
+    /** 已启动的凭据校验线程（onDestroyView 统一中断） */
+    private final java.util.List<Thread> workers =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<Thread>());
 
     private static OkHttpClient sHttp;
 
@@ -651,10 +824,33 @@ public class WebViewLoginFragment extends Fragment {
         }
     }
 
+    private static OkHttpClient sInjectHttp;
+
+    /**
+     * 主文档预注入专用 client（MED-24）。
+     * fetchAndInjectDesktop 在 shouldInterceptRequest 内同步抓取主文档，会阻塞首屏加载；
+     * 复用默认 client（15s 连接 + 20s 读）时弱网下首屏可能被卡住 35 秒。这里收紧到
+     * 5s/8s 并加 12s 总调用上限，超时即返回 null 降级为 WebView 自行加载。
+     */
+    private static OkHttpClient injectClient() {
+        if (sInjectHttp != null) return sInjectHttp;
+        synchronized (WebViewLoginFragment.class) {
+            if (sInjectHttp == null) {
+                sInjectHttp = httpClient().newBuilder()
+                        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+                        .callTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+                        .build();
+            }
+            return sInjectHttp;
+        }
+    }
+
     /**
      * 光鸭主文档 HTML 预注入：用 OkHttp 重新抓取页面（带 WebView 现有 Cookie），
      * 在 &lt;/head&gt; 前插入同步桌面脚本，返回注入后的 HTML。
      * 任何失败/非 HTML/CSP 限制均返回 null，降级让 WebView 自行加载（原有兜底注入仍生效）。
+     * 注意：仅对主文档（isForMainFrame + text/html）生效，子资源不重复抓取。
      */
     private WebResourceResponse fetchAndInjectDesktop(String url) {
         try {
@@ -663,7 +859,7 @@ public class WebViewLoginFragment extends Fragment {
             if (cookies != null && !cookies.isEmpty()) {
                 builder.header("Cookie", cookies);
             }
-            try (var resp = httpClient().newCall(builder.build()).execute()) {
+            try (var resp = injectClient().newCall(builder.build()).execute()) {
                 if (!resp.isSuccessful()) return null;
                 var body = resp.body();
                 if (body == null) return null;
@@ -733,7 +929,7 @@ public class WebViewLoginFragment extends Fragment {
         var accountId = id;
         // HIGH-01：幂等复用场景先备份旧凭据，验证失败恢复而非删除（避免误删旧有效凭据）
         final var prevCk = existing != null ? EncryptedCredStore.get(accountId, "cookie") : null;
-        new Thread(() -> {
+        registerWorker(new Thread(() -> {
             try {
                 // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
                 EncryptedCredStore.put(accountId, "cookie", ck);
@@ -768,7 +964,7 @@ public class WebViewLoginFragment extends Fragment {
                     });
                 }
             }
-        }, "XpMiBackup-quark-validate").start();
+        }, "XpMiBackup-quark-validate")).start();
     }
 
     /**
@@ -867,7 +1063,7 @@ public class WebViewLoginFragment extends Fragment {
         var accountId = id;
         // 幂等复用场景：先备份旧 SSON，验证失败时恢复而非删除账号（避免误删旧有效凭据，HIGH-01）
         final var prevSson = existing != null ? EncryptedCredStore.get(accountId, "sson_cookie") : null;
-        new Thread(() -> {
+        registerWorker(new Thread(() -> {
             try {
                 // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
                 EncryptedCredStore.put(accountId, "sson_cookie", sson);
@@ -901,7 +1097,7 @@ public class WebViewLoginFragment extends Fragment {
                     });
                 }
             }
-        }, "XpMiBackup-189-validate").start();
+        }, "XpMiBackup-189-validate")).start();
     }
 
     /** 保存天翼账号（testConnection 已把 access_token/refresh_token/session_key 持久化；uid 取 login_name 或 JWT 解码） */
@@ -981,7 +1177,7 @@ public class WebViewLoginFragment extends Fragment {
         var accountId = id;
         // 幂等复用场景：先备份旧 Cookie，验证失败时恢复而非删除账号（避免误删旧有效凭据，HIGH-01）
         final var prevCk = existing != null ? EncryptedCredStore.get(accountId, "cookie") : null;
-        new Thread(() -> {
+        registerWorker(new Thread(() -> {
             try {
                 // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
                 EncryptedCredStore.put(accountId, "cookie", ck);
@@ -1015,7 +1211,7 @@ public class WebViewLoginFragment extends Fragment {
                     });
                 }
             }
-        }, "XpMiBackup-baidu-validate").start();
+        }, "XpMiBackup-baidu-validate")).start();
     }
 
     /** 保存百度账号（uid 留空串，列表显示「百度网盘」） */
@@ -1080,7 +1276,7 @@ public class WebViewLoginFragment extends Fragment {
     private void rescrapeWoAndValidate(String prevToken, String accountId, String prevAt) {
         webView.evaluateJavascript(EXTRACT_JS_WO, value -> {
             if (value != null && value.contains("|||")) {
-                var cleaned = value.replace("\"", "");
+                var cleaned = unescapeJsString(value);
                 var parts = cleaned.split("\\|\\|\\|");
                 if (parts.length >= 2) {
                     var at = parts[0].trim();
@@ -1135,7 +1331,7 @@ public class WebViewLoginFragment extends Fragment {
         var accountId = id;
         // 幂等复用场景：先备份旧 access_token，验证失败时恢复而非删除账号（HIGH-01）
         final var prevAt = existing != null ? EncryptedCredStore.get(accountId, "access_token") : null;
-        new Thread(() -> {
+        registerWorker(new Thread(() -> {
             try {
                 // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
                 EncryptedCredStore.put(accountId, "access_token", token);
@@ -1167,7 +1363,7 @@ public class WebViewLoginFragment extends Fragment {
                     });
                 }
             }
-        }, "XpMiBackup-wo-validate").start();
+        }, "XpMiBackup-wo-validate")).start();
     }
 
     /** 保存沃盘账号（access_token + 可选 refresh_token 加密存储；uid 留空展示「联通沃盘」） */
@@ -1248,7 +1444,7 @@ public class WebViewLoginFragment extends Fragment {
         var accountId = id;
         // 幂等复用场景：先备份旧 Cookie，验证失败时恢复而非删除账号（避免误删旧有效凭据，HIGH-01）
         final var prevCk = existing != null ? EncryptedCredStore.get(accountId, "cookie") : null;
-        new Thread(() -> {
+        registerWorker(new Thread(() -> {
             try {
                 // 临时保存用于验证，成功后保留；失败则回滚（有旧值恢复旧值，无旧值才删账号）
                 EncryptedCredStore.put(accountId, "cookie", ck);
@@ -1282,7 +1478,7 @@ public class WebViewLoginFragment extends Fragment {
                     });
                 }
             }
-        }, "XpMiBackup-115-validate").start();
+        }, "XpMiBackup-115-validate")).start();
     }
 
     /** 保存 115 账号（uid 留空串，列表显示「115网盘」） */
@@ -1317,7 +1513,7 @@ public class WebViewLoginFragment extends Fragment {
         if (token.isEmpty()) {
             webView.evaluateJavascript(EXTRACT_JS_123, value -> {
                 if (value != null && !"null".equals(value)) {
-                    var cleaned = value.replace("\"", "").trim();
+                    var cleaned = unescapeJsString(value).trim();
                     if (cleaned.length() > 20) {
                         captured123Bearer = cleaned;
                         bearer123FromRequest = true;
@@ -1359,7 +1555,7 @@ public class WebViewLoginFragment extends Fragment {
         var authValue = token.toLowerCase(java.util.Locale.ROOT).startsWith("bearer ") ? token : "Bearer " + token;
         // HIGH-01：幂等复用场景先备份旧凭据，验证失败恢复而非删除
         final var prevAuth = existing != null ? EncryptedCredStore.get(accountId, "authorization") : null;
-        new Thread(() -> {
+        registerWorker(new Thread(() -> {
             try {
                 // 临时保存用于验证，成功后保留；失败则回滚
                 EncryptedCredStore.put(accountId, "authorization", authValue);
@@ -1387,7 +1583,7 @@ public class WebViewLoginFragment extends Fragment {
                     });
                 }
             }
-        }, "XpMiBackup-123-validate").start();
+        }, "XpMiBackup-123-validate")).start();
     }
 
     /** 保存 123 账号（token 已在后台验证通过）；uid 从 JWT payload 解码回填 */
@@ -1422,7 +1618,7 @@ public class WebViewLoginFragment extends Fragment {
         btnDone.setEnabled(false);
         btnDone.setText(R.string.testing_connection);
         var host = capturedHost;
-        new Thread(() -> {
+        registerWorker(new Thread(() -> {
             var ok = Yun139Login.validate(auth, host);
             if (getActivity() == null) return;
             getActivity().runOnUiThread(() -> {
@@ -1434,7 +1630,7 @@ public class WebViewLoginFragment extends Fragment {
                     Toast.makeText(getActivity(), R.string.toast_cloud_auth_invalid, Toast.LENGTH_LONG).show();
                 }
             });
-        }, "XpMiBackup-139-validate").start();
+        }, "XpMiBackup-139-validate")).start();
     }
 
     /** 光鸭：Bearer 来自真实请求头即直接保存（登录成功必然有效）；仅 localStorage 提取也接受 */
@@ -1516,7 +1712,7 @@ public class WebViewLoginFragment extends Fragment {
     /** 解析阿里云盘 localStorage 扫描结果（"access|||refresh"）并更新捕获状态 */
     private void parseAliyunExtract(String value) {
         if (value == null || !value.contains("|||")) return;
-        var cleaned = value.replace("\"", "");
+        var cleaned = unescapeJsString(value);
         var parts = cleaned.split("\\|\\|\\|");
         if (parts.length < 2) return;
         var at = parts[0].trim();
@@ -1564,7 +1760,7 @@ public class WebViewLoginFragment extends Fragment {
         // 幂等复用场景：先备份旧 refresh_token，验证失败时恢复而非删除账号（HIGH-01）
         final var prev = prevRt != null ? prevRt
                 : (existing != null ? EncryptedCredStore.get(accountId, "refresh_token") : null);
-        new Thread(() -> {
+        registerWorker(new Thread(() -> {
             try {
                 EncryptedCredStore.put(accountId, "refresh_token", refreshToken);
                 // 清掉可能残留的旧 access_token，强制走「刷新换新 + user/get 建身份」完整链路
@@ -1593,7 +1789,7 @@ public class WebViewLoginFragment extends Fragment {
                     });
                 }
             }
-        }, "XpMiBackup-aliyun-validate").start();
+        }, "XpMiBackup-aliyun-validate")).start();
     }
 
     /** 保存阿里云盘账号（uid 取 user/get 的 nickname，列表展示「阿里云盘 · 昵称」） */
@@ -1671,7 +1867,15 @@ public class WebViewLoginFragment extends Fragment {
 
     @Override
     public void onDestroyView() {
+        // MED-25：中断仍在跑凭据校验的线程，避免闭包继续持有 Fragment / btnDone 造成延迟回收
+        synchronized (workers) {
+            for (var t : workers) {
+                t.interrupt();
+            }
+            workers.clear();
+        }
         if (webView != null) {
+            cancelPendingBlankCheck();
             webView.stopLoading();
             webView.setWebViewClient(null);
             webView.destroy();

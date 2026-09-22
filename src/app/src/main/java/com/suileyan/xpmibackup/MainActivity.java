@@ -378,19 +378,25 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** 发现新版本小窗：可点空白/返回取消；「前往下载」GitHub 页 + 「下载 APK」123 网盘分享链接 */
+    /** 发现新版本小窗：自定义竖排按钮布局（长标签不再被横排按钮条截断）；可点空白/返回取消 */
     private void showUpdateDialog(UpdateChecker.Result result) {
-        var builder = new AlertDialog.Builder(this)
-                .setTitle(R.string.about_title)
-                .setMessage(getString(R.string.about_new_version, result.latestVersion))
-                .setNegativeButton(android.R.string.cancel, null)
-                .setCancelable(true);
+        var view = getLayoutInflater().inflate(R.layout.dialog_update, null);
+        ((android.widget.TextView) view.findViewById(R.id.tv_update_message))
+                .setText(getString(R.string.update_dialog_message, result.latestVersion));
+        var dialog = new AlertDialog.Builder(this)
+                .setView(view)
+                .setCancelable(true)
+                .create();
         // 下载 APK：固定指向 123 网盘分享链接（国内可达）；config.ini download_url 可覆盖
-        builder.setNeutralButton(R.string.about_download_apk,
-                (d, w) -> openUpdateBrowser(UpdateChecker.apkDownloadUrl()));
-        builder.setPositiveButton(R.string.about_open_browser,
-                (d, w) -> openUpdateBrowser(result.htmlUrl));
-        var dialog = builder.create();
+        view.findViewById(R.id.btn_update_download).setOnClickListener(v -> {
+            dialog.dismiss();
+            openUpdateBrowser(UpdateChecker.apkDownloadUrl());
+        });
+        view.findViewById(R.id.btn_update_github).setOnClickListener(v -> {
+            dialog.dismiss();
+            openUpdateBrowser(result.htmlUrl);
+        });
+        view.findViewById(R.id.btn_update_cancel).setOnClickListener(v -> dialog.dismiss());
         // 点击空白处取消弹窗
         dialog.setCanceledOnTouchOutside(true);
         dialog.show();

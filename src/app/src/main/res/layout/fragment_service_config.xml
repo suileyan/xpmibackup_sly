@@ -89,6 +89,7 @@
                 android:id="@+id/et_profile_name"
                 style="@style/XmInput"
                 android:hint="@string/profile_name_hint"
+                android:imeOptions="actionNext"
                 android:inputType="text"
                 android:maxLines="1" />
         </LinearLayout>
@@ -170,6 +171,7 @@
                     android:id="@+id/et_upload_threads"
                     style="@style/XmInput"
                     android:hint="3"
+                    android:imeOptions="actionNext"
                     android:inputType="number"
                     android:layout_marginBottom="@dimen/field_gap" />
 
@@ -191,6 +193,7 @@
                     android:id="@+id/et_chunk_size_mb"
                     style="@style/XmInput"
                     android:hint="64"
+                    android:imeOptions="actionNext"
                     android:inputType="number" />
             </LinearLayout>
 
@@ -228,6 +231,7 @@
                         android:id="@+id/et_smb_server"
                         style="@style/XmInput"
                         android:hint="@string/smb_server_hint"
+                        android:imeOptions="actionNext"
                         android:inputType="text"
                         android:layout_marginBottom="@dimen/field_gap" />
 
@@ -248,7 +252,8 @@
                     <EditText
                         android:id="@+id/et_smb_port"
                         style="@style/XmInput"
-                        android:text="445"
+                        android:imeOptions="actionNext"
+                        android:hint="445"
                         android:inputType="number"
                         android:layout_marginBottom="@dimen/field_gap" />
 
@@ -270,6 +275,7 @@
                         android:id="@+id/et_smb_share"
                         style="@style/XmInput"
                         android:hint="@string/share_folder_hint"
+                        android:imeOptions="actionNext"
                         android:inputType="text"
                         android:layout_marginBottom="@dimen/field_gap" />
 
@@ -291,6 +297,7 @@
                         android:id="@+id/et_smb_user"
                         style="@style/XmInput"
                         android:hint="@string/username"
+                        android:imeOptions="actionNext"
                         android:inputType="text"
                         android:layout_marginBottom="@dimen/field_gap" />
 
@@ -312,7 +319,8 @@
                         android:id="@+id/et_smb_pass"
                         style="@style/XmInput"
                         android:hint="@string/password"
-                        android:inputType="text" />
+                        android:imeOptions="actionNext"
+                        android:inputType="textPassword" />
                 </LinearLayout>
 
                 <!-- WebDAV 配置面板 -->
@@ -341,6 +349,7 @@
                         android:id="@+id/et_webdav_url"
                         style="@style/XmInput"
                         android:hint="@string/webdav_url_hint"
+                        android:imeOptions="actionNext"
                         android:inputType="textUri"
                         android:layout_marginBottom="@dimen/space_8" />
 
@@ -370,6 +379,7 @@
                         android:id="@+id/et_webdav_user"
                         style="@style/XmInput"
                         android:hint="@string/username"
+                        android:imeOptions="actionNext"
                         android:inputType="text"
                         android:layout_marginBottom="@dimen/field_gap" />
 
@@ -391,7 +401,8 @@
                         android:id="@+id/et_webdav_pass"
                         style="@style/XmInput"
                         android:hint="@string/password"
-                        android:inputType="text" />
+                        android:imeOptions="actionDone"
+                        android:inputType="textPassword" />
                 </LinearLayout>
             </LinearLayout>
         </LinearLayout>

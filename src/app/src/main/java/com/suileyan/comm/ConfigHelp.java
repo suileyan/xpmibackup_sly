@@ -39,6 +39,10 @@ public class ConfigHelp {
             "authorization", "access_token", "refresh_token", "cookie", "cookie_token",
             "did", "x-device-sign");
 
+    /** URL 内嵌凭据（scheme://user:pass@host）：保存时剥离 userinfo，防密码明文落盘（MED-04） */
+    private static final java.util.regex.Pattern URL_USERINFO =
+            java.util.regex.Pattern.compile("(?i)^((?:https?|ftp)://)[^/@\\s]+@");
+
     /** 账号级参数覆盖：Provider 执行时把当前账号连接参数临时注入，底层 FileHelp 零改动读取 */
     private static final ThreadLocal<Map<String, String>> ACCOUNT_OVERRIDE = new ThreadLocal<>();
 
@@ -177,7 +181,17 @@ public class ConfigHelp {
                 continue;
             }
             var val = json.opt(key);
-            sb.append(key).append('=').append(val != null ? val.toString() : "").append('\n');
+            var text = val != null ? val.toString() : "";
+            // MED-04：黑名单是按 key 名过滤，挡不住"值里内嵌凭据"——webdav_url 若写成
+            // http://user:pass@host/dav，账号密码会明文落进 config.ini（外部存储）。
+            // 这里对任何带 scheme 的值剥掉 userinfo，并提示改用独立凭据键。
+            var userinfo = URL_USERINFO.matcher(text.trim());
+            if (userinfo.find()) {
+                LogHelp.w(TAG, "ConfigHelp.save: " + key + " 的值含内嵌账号密码，已剥离"
+                        + "（请改用 webdav_user / webdav_pass 等独立凭据键）");
+                text = userinfo.replaceFirst("$1");
+            }
+            sb.append(key).append('=').append(text).append('\n');
         }
         if (AtomicFile.write(file, sb.toString().getBytes(StandardCharsets.UTF_8))) {
             // 保存成功则刷新缓存，避免读到旧值
@@ -226,11 +240,13 @@ public class ConfigHelp {
             return;
         }
         var moved = new StringBuilder();
-        // 1) 5 个固定文件：逐个迁移（旧存在 + 新不存在才动，幂等）
+        // 1) 固定文件：逐个迁移（旧存在 + 新不存在才动，幂等）
         migrateFile(new File(BACKUP_ROOT, "config.ini"), new File(SLY_ROOT, "config.ini"), moved);
         migrateFile(new File(BACKUP_ROOT, "creds.json"), new File(SLY_ROOT, "creds.json"), moved);
         migrateFile(new File(BACKUP_ROOT, "cloud_accounts.json"), new File(SLY_ROOT, "cloud_accounts.json"), moved);
         migrateFile(new File(BACKUP_ROOT, "profiles.json"), new File(SLY_ROOT, "profiles.json"), moved);
+        // backup_target.json（MED-14）：此前漏在清单外，是唯一散落在 BACKUP_ROOT 的模块文件
+        migrateFile(new File(BACKUP_ROOT, "backup_target.json"), new File(SLY_ROOT, "backup_target.json"), moved);
         // 2) logs/ 目录递归搬入（新目录已有同名文件则跳过该文件，避免覆盖新写的日志）
         migrateDir(new File(BACKUP_ROOT, "logs"), new File(SLY_ROOT, "logs"), moved);
         if (moved.length() > 0) {

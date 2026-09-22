@@ -19,7 +19,13 @@ import java.nio.file.Files;
 public final class BackupTarget {
 
     private static final String TAG = "XpMiBackup";
-    private static final String TARGET_FILE = "/sdcard/MIUI/backup/backup_target.json";
+    /**
+     * MED-14：与其它模块文件统一收纳在 SLY_ROOT 下。
+     * 此前这里是唯一没走 SLY_ROOT 的模块文件（仍写 /MIUI/backup/backup_target.json），
+     * 迁移清单也不含它——清理旧目录即丢备份目标，配置散落两处。
+     * 旧位置由 ConfigHelp.ensureSlyLayout 首次启动时自动迁入。
+     */
+    private static final String TARGET_FILE = com.suileyan.comm.ConfigHelp.slyRoot() + "/backup_target.json";
     private static final String KEY_MODE = "mode";
     private static final String KEY_ID = "id";
 
@@ -64,13 +70,18 @@ public final class BackupTarget {
 
     private static void save(String mode, String id) {
         try {
+            com.suileyan.comm.ConfigHelp.ensureSlyLayout();
             var file = new File(TARGET_FILE);
             var dir = file.getParentFile();
             if (dir != null && !dir.exists()) dir.mkdirs();
             var root = new JSONObject();
             root.put(KEY_MODE, mode == null ? "" : mode);
             root.put(KEY_ID, id == null ? "" : id);
-            AtomicFile.write(file, root.toString().getBytes(StandardCharsets.UTF_8));
+            // MED-11：写失败不再静默——否则备份目标"设置成功"是假的，宿主读到的仍是旧目标
+            if (!AtomicFile.write(file, root.toString().getBytes(StandardCharsets.UTF_8))) {
+                LogHelp.e(TAG, "save backup target failed: atomic write returned false: " + file.getAbsolutePath());
+                return;
+            }
             LogHelp.i(TAG, "backup target saved: mode=" + mode + " id=" + id);
         } catch (Exception e) {
             LogHelp.e(TAG, "save backup target failed", e);
@@ -80,6 +91,11 @@ public final class BackupTarget {
     private static Holder load() {
         var holder = new Holder();
         try {
+            // 跨进程顺序陷阱：TARGET_FILE 指向 SLY_ROOT，而旧位置文件由
+            // ConfigHelp.ensureSlyLayout 迁移过来。若本进程先读目标再读配置（宿主启动早期
+            // 就可能这样），迁移没跑 = 读到空目标 = 回退到激活方案，备份被写到别处。
+            // 这里先兜一次幂等迁移（进程内只跑一次，代价是一次 boolean 读）。
+            com.suileyan.comm.ConfigHelp.ensureSlyLayout();
             var file = new File(TARGET_FILE);
             if (!file.exists()) return holder;
             var root = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));

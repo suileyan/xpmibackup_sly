@@ -198,6 +198,14 @@ public class Pan123Provider implements CloudProvider {
             var parentId = resolvePath(remoteDir, true);
             if (cb != null) cb.onStart(taskId);
             var size = localFile.length();
+            // MED-12：0 字节文件（备份完成标记 end）没有可上传分片——旧实现 while(offset<size)
+            // 一次不执行，直接拿 0 个分片去 s3_list/s3_complete，路径脆弱且依赖服务端容忍。
+            // 与百度/沃盘/光鸭/阿里一致：直接视为成功（云端无需真实存在，恢复列表只依赖 descript.xml）
+            if (size == 0) {
+                LogHelp.i(TAG, "123云盘跳过 0 字节文件（无分片可传）: " + localFile.getName());
+                if (cb != null) cb.onFinish(taskId, 0, "success");
+                return;
+            }
             var etag = md5Hex(localFile);
 
             // 1. upload_request（签名）：第一次 form 编码，duplicate=0（同名时服务端返回 code=5060）
@@ -571,6 +579,7 @@ public class Pan123Provider implements CloudProvider {
     /** 分页收集目录下所有条目（list/new 分页，guard 上限防死循环） */
     private List<Item> collectEntries(String parentId) throws CloudException {
         var items = new ArrayList<Item>();
+        var seen = new java.util.HashSet<String>();
         var page = 1;
         for (var guard = 0; guard < MAX_PAGES; guard++) {
             var json = callGetList("/b/api/file/list/new", listParams(parentId, page));
@@ -578,11 +587,20 @@ public class Pan123Provider implements CloudProvider {
             if (data == null) break;
             var arr = data.optJSONArray("InfoList");
             if (arr == null || arr.length() == 0) break;
+            var added = 0;
             for (var i = 0; i < arr.length(); i++) {
                 var obj = arr.optJSONObject(i);
-                if (obj != null) items.add(Item.fromJson(obj));
+                if (obj == null) continue;
+                var item = Item.fromJson(obj);
+                // MED-11：按 fileId 去重——若 123 侧实际以 next 游标分页，恒发 next=0 会反复返回首页，
+                // 仅靠 items/total 判定会把同一批条目重复收集（恢复列表出现重复项）
+                if (!item.fileId.isEmpty() && !seen.add(item.fileId)) continue;
+                items.add(item);
+                added++;
             }
             var total = data.optLong("Total", 0L);
+            // 本页无新增条目 = 分页已停滞（游标未生效或已到末页），必须停止，否则空转 MAX_PAGES 轮
+            if (added == 0) break;
             if (arr.length() < PAGE_SIZE || (total > 0 && items.size() >= total)) break;
             page++;
         }

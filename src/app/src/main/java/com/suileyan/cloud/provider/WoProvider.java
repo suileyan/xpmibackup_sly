@@ -1078,7 +1078,9 @@ public class WoProvider implements CloudProvider {
     private static void sleep(long ms) {
         try {
             Thread.sleep(ms);
-        } catch (InterruptedException ignored) {
+        } catch (InterruptedException ie) {
+            // MED-09：吞中断会让取消信号丢失、重试循环无法提前终止
+            Thread.currentThread().interrupt();
         }
     }
 

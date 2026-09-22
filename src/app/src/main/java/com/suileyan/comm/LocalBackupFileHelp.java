@@ -15,7 +15,10 @@ public final class LocalBackupFileHelp {
     }
 
     /**
-     * 解析小米备份已经写好的本地文件，切片文件会跟随该文件目录
+     * 解析小米备份已经写好的本地文件（返回宿主 AllBackupTemp 下的原始备份文件）。
+     *
+     * 返回值即上传源，调用方**不要**再整份复制：上传走"边切边传、每片传完即删"，
+     * 分片落在 {@code AllBackupTemp/miback/} 而不是源文件目录，手机端峰值占用只跟分片数有关。
      */
     public static File resolveUploadFile(ParcelFileDescriptor pfd, String aidlPath) {
         var file = localBackupFile(aidlPath);

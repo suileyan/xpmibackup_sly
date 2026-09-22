@@ -29,6 +29,8 @@
     <string name="about_check_failed">Check failed. Please try again later.</string>
     <string name="about_open_browser">GitHub Releases</string>
     <string name="about_download_apk">Download APK (123)</string>
+    <string name="update_dialog_title">Update Available</string>
+    <string name="update_dialog_message">Version v%1$s is available. Download now?</string>
     <string name="tab_device_config">Device</string>
     <string name="tab_service_config">NAS</string>
     <string name="tab_account_config">Cloud</string>
@@ -234,7 +236,7 @@
     <string name="root_modules_backup">Also back up Root modules (Magisk/KernelSU/APatch, root required)</string>
     <string name="auto_delete_local">Auto-delete local backup file after upload</string>
     <string name="auto_delete_local_hint">Frees storage so small devices can complete backups</string>
-    <string name="serial_upload">Back up one item at a time (100% before next)</string>
+    <string name="serial_upload" formatted="false">Back up one item at a time (100% before next)</string>
     <string name="serial_upload_hint">Default is parallel: several items advance at ~30% together</string>
     <string name="root_modules_packing">Packing Root modules...</string>
     <string name="root_modules_pack_fail">Failed to pack Root modules, this backup will not include them:</string>

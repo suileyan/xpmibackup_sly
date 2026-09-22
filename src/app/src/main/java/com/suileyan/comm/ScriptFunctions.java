@@ -514,8 +514,21 @@ public final class ScriptFunctions {
                     var path = args.length > 0 ? Context.toString(args[0]) : "";
                     var data = args.length > 1 ? Context.toString(args[1]) : "";
                     try {
+                        // MED-29：先按 Base64 长度估算解码后大小（4 字符→3 字节，向下取整即保守下界），
+                        // 拒绝超限后再解码——否则整段 base64 会无上限地解进内存（readTempFile 有 16MB 上限）
+                        if ((long) data.length() / 4 * 3 > READ_TEMP_FILE_MAX) {
+                            throw new SecurityException("writeTempFile too large (max 16MB)");
+                        }
+                        var bytes = Base64.getDecoder().decode(data);
+                        if (bytes.length > READ_TEMP_FILE_MAX) {
+                            throw new SecurityException("writeTempFile too large (max 16MB)");
+                        }
+                        // MED-29：改为「临时文件 + rename」原子写，避免中途失败留下半截文件被后续流程当完整数据
                         // Paths.get（API 26）：Path.of 需 API 34，Android 11~13 会 NoSuchMethodError
-                        Files.write(java.nio.file.Paths.get(resolveTempPath(path)), Base64.getDecoder().decode(data));
+                        var target = java.nio.file.Paths.get(resolveTempPath(path));
+                        var tmp = target.resolveSibling(target.getFileName() + ".part");
+                        Files.write(tmp, bytes);
+                        Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                     } catch (IOException e) {
                         throw new IllegalStateException("writeTempFile failed for " + path + ": " + e.getMessage(), e);
                     }
@@ -604,7 +617,10 @@ public final class ScriptFunctions {
         String canonicalPath;
         try {
             canonicalDir = dir.getCanonicalPath();
-            canonicalPath = new File(path).getCanonicalPath();
+            // MED-28：相对路径必须显式按 scriptTempDir 解析。new File(相对路径).getCanonicalPath()
+            // 是按 JVM 工作目录（CWD）解析的，CWD 恰好落在 script_temp 下时就能越出当前账号目录。
+            var f = new File(path);
+            canonicalPath = (f.isAbsolute() ? f : new File(dir, path)).getCanonicalPath();
         } catch (IOException e) {
             throw new SecurityException("invalid temp file path: " + path, e);
         }

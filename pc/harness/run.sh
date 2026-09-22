@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 端到端逻辑通路验证：应用真实源码(WebdavFileHelp/ConfigHelp/LogHelp) 在桌面 JVM 直接打 Go 服务端
-# 前置：mibackpc.exe 已在 18321 端口运行（见 pc/README.md）
+# 前置：pc/dist/mibackpc.exe 已在 18321 端口运行（见 pc/README.md）
 set -e
 PC_WIN="$(cygpath -m "$(cd "$(dirname "$0")/.." && pwd)")"
 APP_SRC="$PC_WIN/../src/app/src/main/java/com/suileyan"

@@ -3,7 +3,6 @@ package com.suileyan.xpmibackup.hook;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Bundle;
 import android.widget.ImageView;
 import com.suileyan.comm.LogHelp;
 import com.suileyan.xpmibackup.R;
@@ -44,8 +43,9 @@ public class SettingsHook {
         // 强制支持智能存储备份
         hookGetAvailabilityStatus(lpparam);
         hookIsSupported(lpparam);
-        // 设备信息
-        hookBackupNasDeviceProvider(lpparam);
+        // 设备信息（NAS 设备列表的 Provider hook 不在这里：BackupNasDeviceProvider 属于
+        // com.miui.backup，ContentProvider.query 在宿主进程执行，设置进程 hook 恒不生效。
+        // 已迁到 BackupHook.hookNasDeviceProvider —— HIGH-01）
         hookSmartStorageSummary(lpparam);
     }
 
@@ -330,41 +330,6 @@ public class SettingsHook {
             });
         } catch (Throwable e) {
             logSmartStorageMiss("hookIsSupported", e);
-        }
-    }
-
-    /**
-     * 拦截BackupNasDeviceProvider.query()
-     * 原始方法查询已配对的NAS设备列表，无设备时返回空结果
-     * 注入后返回模拟的NAS设备数据（设备ID、名称、类型），
-     * 使设置界面显示可用的备份目标设备
-     */
-    private void hookBackupNasDeviceProvider(XC_LoadPackage.LoadPackageParam lpparam) {
-        try {
-            var clazz = XposedHelpers.findClassIfExists("com.miui.backup.provider.BackupNasDeviceProvider", lpparam.classLoader);
-            if (clazz == null) {
-                LogHelp.w(TAG, "BackupNasDeviceProvider not found, skip provider hook");
-                return;
-            }
-            final var deviceId = com.suileyan.comm.ConfigHelp.getString("device_id", "");
-            final var deviceName = com.suileyan.comm.ConfigHelp.getString("device_name", "");
-            XposedHelpers.findAndHookMethod(clazz, "query",
-                android.net.Uri.class, String[].class, Bundle.class, android.os.CancellationSignal.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        var cursor = new android.database.MatrixCursor(new String[]{"device_id", "device_name", "device_type"});
-                        cursor.addRow(new Object[]{deviceId, deviceName, "nas"});
-                        var extras = new Bundle();
-                        var deviceList = new java.util.HashMap<String, String>();
-                        deviceList.put(deviceId, deviceName);
-                        extras.putSerializable("key_device_list", deviceList);
-                        cursor.setExtras(extras);
-                        param.setResult(cursor);
-                    }
-                });
-        } catch (Throwable e) {
-            logError("hookBackupNasDeviceProvider failed", e);
         }
     }
 

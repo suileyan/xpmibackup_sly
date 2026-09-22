@@ -26,6 +26,8 @@ public final class ProviderRegistry {
 
     private static final String TAG = "XpMiBackup";
     private static final Map<String, CloudProvider> CACHE = new ConcurrentHashMap<>();
+    /** 构造缓存时方案文件的 mtime（见 get() 的跨进程失效说明） */
+    private static volatile long sProfileStamp = -1L;
 
     private ProviderRegistry() {
     }
@@ -113,6 +115,15 @@ public final class ProviderRegistry {
     public static CloudProvider get(String profileId) {
         if (profileId == null || profileId.isEmpty()) {
             throw new IllegalStateException("empty profile id");
+        }
+        // 跨进程失效：方案文件被「别的进程」改写时丢弃本进程缓存。宿主进程（com.miui.backup）
+        // 与 UI 进程各有自己的静态 CACHE，UI 侧 invalidate() 到不了宿主；只比对文件 mtime
+        // （一次 stat，无文件读取）。典型场景：UI 把「电脑备份」切到 USB 通道后，
+        // 宿主必须立刻用新地址，否则会继续往局域网地址传。
+        var stamp = ProfileStore.stamp();
+        if (stamp != sProfileStamp) {
+            CACHE.clear();
+            sProfileStamp = stamp;
         }
         var cached = CACHE.get(profileId);
         if (cached != null) return cached;

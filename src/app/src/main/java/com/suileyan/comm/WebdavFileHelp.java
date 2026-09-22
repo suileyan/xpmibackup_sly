@@ -98,7 +98,12 @@ public class WebdavFileHelp {
                 sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
                 builder.sslSocketFactory(sslContext.getSocketFactory(), (javax.net.ssl.X509TrustManager) trustAllCerts[0])
                     .hostnameVerifier((h, s) -> true);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                // 不静默：失败会退回默认证书校验，即 webdav_insecure_tls=true 实际不生效
+                // （自签名证书的 NAS 会报 SSL 错误），必须能在日志里看出来
+                LogHelp.w(TAG, "构建不安全 TLS 客户端失败，将退回默认证书校验："
+                        + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
+            }
             sInsecureClient = builder.build();
             return sInsecureClient;
         }
@@ -164,13 +169,28 @@ public class WebdavFileHelp {
 
     // ========== 公共方法 ==========
 
-    /** 测试WebDAV连接是否可达（必须返回207 Multi-Status才算真正成功） */
+    /**
+     * 测试WebDAV连接是否可达（必须返回207 Multi-Status才算真正成功）
+     *
+     * MED-05：非 207 时按状态码抛出带语义的 CloudException，而不是笼统 return false——
+     * 上层 CredentialChecker 把 false 一律判为「凭证失效」，网络抖动/服务端 5xx
+     * 会被误报成需要重新登录（与 RetryPolicy 的 NETWORK 可重试语义矛盾）。
+     */
     public static boolean testConnection() throws Exception {
         var url = baseUrl();
         var res = propfind(url, 0);
-        var ok = Integer.parseInt(res[0]) == HTTP_MULTISTATUS;
+        var code = Integer.parseInt(res[0]);
+        var ok = code == HTTP_MULTISTATUS;
         LogHelp.i(TAG, "WebDAV test " + (ok ? "OK" : "FAILED") + " http=" + res[0] + " host=" + hostOf(url));
-        return ok;
+        if (ok) {
+            return true;
+        }
+        if (code == 401 || code == 403) {
+            throw new com.suileyan.cloud.CloudException(com.suileyan.cloud.CloudException.Kind.AUTH_EXPIRED,
+                    "WebDAV 认证失败 HTTP " + code);
+        }
+        throw new com.suileyan.cloud.CloudException(com.suileyan.cloud.CloudException.Kind.REMOTE,
+                "WebDAV 不可用 HTTP " + code);
     }
 
     /** 列出backup_path目录中的备份子目录名 */
@@ -207,7 +227,8 @@ public class WebdavFileHelp {
                 continue;
             }
             if (name.isEmpty()) continue;
-            names.add(decodeName(name));
+            var safe = safeEntryName(decodeName(name));
+            if (!safe.isEmpty()) names.add(safe);
         }
         return names;
     }
@@ -236,11 +257,24 @@ public class WebdavFileHelp {
             var lengthMatcher = LENGTH_PATTERN.matcher(block);
             var isDir = DIR_PATTERN.matcher(block).find();
             var size = (!isDir && lengthMatcher.find()) ? Long.parseLong(lengthMatcher.group(1)) : 0L;
-            // 服务端 href 是 URL 编码的，解码后返回避免二次编码（NEW-M-08）
-            entries.add(new RemoteEntry(decodeName(name), size, isDir, System.currentTimeMillis()));
+            // 服务端 href 是 URL 编码的，解码后返回避免二次编码（NEW-M-08）；
+            // 解码后仍须净化——被攻陷的服务端可用 %2F/.. 构造路径穿越（HIGH-09）
+            var safe = safeEntryName(decodeName(name));
+            if (safe.isEmpty()) continue;
+            entries.add(new RemoteEntry(safe, size, isDir, System.currentTimeMillis()));
         }
         LogHelp.i(TAG, "WebDAV listEntries OK dir=" + path + " count=" + entries.size());
         return entries;
+    }
+
+    /** 远端条目名净化（HIGH-09）：href 末段可能含 .. / 路径分隔符 / NUL，
+     *  一旦被 deleteDir 回退逻辑拼进远端路径即构成服务端路径穿越。非法名直接丢弃。 */
+    private static String safeEntryName(String name) {
+        if (name == null) return "";
+        var n = name.trim();
+        if (n.isEmpty() || ".".equals(n) || "..".equals(n)) return "";
+        if (n.indexOf('/') >= 0 || n.indexOf('\\') >= 0 || n.indexOf('\u0000') >= 0) return "";
+        return n;
     }
 
     /** URL 解码 WebDAV 返回的名称（NEW-M-08）；解码失败时原样返回 */
@@ -339,7 +373,11 @@ public class WebdavFileHelp {
         }
     }
 
-    /** 上传文件并回调进度（备份用） */
+    /** 上传文件并回调进度（备份用）。
+     *  非 2xx 必须抛异常：本方法返回 void，调用链（Provider.uploadWithProgress →
+     *  CloudFileHelp.uploadWithProgress）以「是否抛异常」判定成败——
+     *  早期实现只 cb.onFinish(taskId, -1, ...) 而不抛，导致磁盘满/403/507 时
+     *  整次备份被误判为成功（CRIT-02）。 */
     public static void uploadToWebdav(String localPath, ProgressCallback cb, String remoteDir, String taskId) throws Exception {
         var localFile = new File(localPath);
         if (!localFile.exists()) throw new FileNotFoundException("file not found: " + localPath);
@@ -360,13 +398,12 @@ public class WebdavFileHelp {
                 if (resp.body() != null) resp.body().string();
                 LogHelp.i(TAG, "WebDAV backup upload " + (code >= 200 && code < 300 ? "done" : "failed http=" + code)
                         + ": " + remotePath + " size=" + fileSize);
-                if (cb != null) {
-                    if (code >= 200 && code < 300) {
-                        cb.onFinish(taskId, 0, "success");
-                    } else {
-                        cb.onFinish(taskId, -1, "HTTP " + code);
-                    }
+                if (code < 200 || code >= 300) {
+                    if (cb != null) cb.onFinish(taskId, -1, "HTTP " + code);
+                    // 507 = 存储不足、403 = 无权限、401 = 凭据失效……一律上抛，禁止当成功
+                    throw new java.io.IOException("WebDAV upload failed: HTTP " + code + " path=" + remotePath);
                 }
+                if (cb != null) cb.onFinish(taskId, 0, "success");
             }
         }
     }

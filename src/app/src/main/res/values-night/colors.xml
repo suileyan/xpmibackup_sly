@@ -1,95 +1,98 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Material Design 3 色彩体系 —— 深色
+  Material Design 3 色彩体系 —— 深色（黑白灰 / 低饱和）
   ─────────────────────────────────────────────────────────────
-  对称翻转：MD3 深色用「暖深灰」surface-container 色阶（非纯黑），
-  文字用暖白系 on-surface（避免光晕感）。品牌橙派生的 primary 在深色下
-  提亮为 #FF8B5E（对 #1A120D 级表面 ≥ 4.5:1）。
+  对称翻转：深色用中性近黑 surface 色阶（#121212 起），文字用中性近白 on-surface。
+  原品牌橙派生 primary 改为提亮中性灰（#C8C8C8）作点缀（对深色表面 ≥ 4.5:1）。
   兼容别名与浅色一致（旧色名保留，指向深色色板），Java 直引不断。
   可访问性：所有文字层级对对应表面色阶满足 WCAG 2.1 AA（≥4.5:1）。
+  语义色保留极低饱和灰调版本，仅作状态辨识，不破坏中性基调。
 -->
 <resources>
-    <!-- ========== MD3 主色板（品牌橙 #FF6900 深色派生，提亮） ========== -->
-    <color name="md3_primary">#FF8B5E</color>
-    <color name="md3_on_primary">#5B2E00</color>
-    <color name="md3_primary_container">#6B3B1F</color>
-    <color name="md3_on_primary_container">#FFDBCC</color>
-    <color name="md3_inverse_primary">#B84E00</color>
+    <!-- ========== MD3 主色板（中性灰，原品牌色位置，深色提亮） ========== -->
+    <color name="md3_primary">#C8C8C8</color>
+    <color name="md3_on_primary">#1A1A1A</color>
+    <color name="md3_primary_container">#383838</color>
+    <color name="md3_on_primary_container">#E8E8E8</color>
+    <color name="md3_inverse_primary">#2A2A2A</color>
 
-    <!-- 品牌强调（点缀 / 主 CTA 填充 / 选中态图标） -->
-    <color name="brand">#FF8B5E</color>
-    <color name="brand_pressed">#FFAB85</color>
-    <color name="on_brand">#5B2E00</color>
-    <color name="brand_container">#6B3B1F</color>
-    <color name="brand_container_pressed">#7D4826</color>
+    <!-- 品牌强调（点缀 / 主 CTA 填充 / 选中态图标）—— 中性灰 -->
+    <color name="brand">#C8C8C8</color>
+    <color name="brand_pressed">#B0B0B0</color>
+    <color name="on_brand">#1A1A1A</color>
+    <color name="brand_container">#383838</color>
+    <color name="brand_container_pressed">#444444</color>
 
     <!-- ========== 兼容别名（旧引用，语义等价） ========== -->
-    <color name="primary">#FF8B5E</color>
-    <color name="primary_dark">#FFAB85</color>
-    <color name="primary_light">#2C2520</color>
-    <color name="primary_text_on">#5B2E00</color>
+    <color name="primary">#C8C8C8</color>
+    <color name="primary_dark">#B0B0B0</color>
+    <color name="primary_light">#242424</color>
+    <color name="primary_text_on">#1A1A1A</color>
 
-    <!-- ========== 页面与表面（MD3 深色 surface-container 色阶） ========== -->
-    <color name="md3_surface">#1A120D</color>
-    <color name="md3_on_surface">#F0E6DC</color>
-    <color name="md3_surface_container_low">#231B16</color>
-    <color name="md3_surface_container">#2C2520</color>
-    <color name="md3_surface_container_high">#37302B</color>
-    <color name="md3_surface_container_highest">#413A34</color>
-    <color name="md3_on_surface_variant">#C9BFB5</color>
-    <color name="md3_outline">#948B81</color>
-    <color name="md3_outline_variant">#494340</color>
+    <!-- ========== 页面与表面（MD3 中性深色 surface-container 色阶） ========== -->
+    <color name="md3_surface">#121212</color>
+    <color name="md3_on_surface">#E8E8E8</color>
+    <color name="md3_surface_container_low">#1C1C1C</color>
+    <color name="md3_surface_container">#242424</color>
+    <color name="md3_surface_container_high">#2E2E2E</color>
+    <color name="md3_surface_container_highest">#383838</color>
+    <color name="md3_on_surface_variant">#B0B0B0</color>
+    <color name="md3_outline">#707070</color>
+    <color name="md3_outline_variant">#3A3A3A</color>
 
     <!-- 旧色名 → MD3 表面色阶别名 -->
-    <color name="background">#1A120D</color>
-    <color name="surface">#231B16</color>
-    <color name="surface_variant">#2C2520</color>
-    <color name="input_bg">#2C2520</color>
-    <color name="surface_pressed">#37302B</color>
-    <color name="card_border">#413A34</color>
-    <color name="divider">#14C9BFB5</color>
-    <color name="outline">#948B81</color>
-    <color name="status_bar">#1A120D</color>
+    <color name="background">#121212</color>
+    <color name="surface">#1C1C1C</color>
+    <color name="surface_variant">#242424</color>
+    <color name="input_bg">#242424</color>
+    <color name="surface_pressed">#2E2E2E</color>
+    <color name="card_border">#383838</color>
+    <color name="divider">#1FB0B0B0</color>
+    <color name="outline">#707070</color>
+    <color name="status_bar">#121212</color>
 
     <!-- 导航栏与浮层（MD3 深色导航栏 = surface-container） -->
-    <color name="nav_bar">#231B16</color>
-    <color name="nav_bar_border">#494340</color>
+    <color name="nav_bar">#1C1C1C</color>
+    <color name="nav_bar_border">#3A3A3A</color>
     <color name="scrim">#A6000000</color>
-    <color name="ripple">#1AF0E6DC</color>
+    <color name="ripple">#1FE8E8E8</color>
     <color name="ripple_on_brand">#4DFFFFFF</color>
 
-    <!-- ========== 文字层级（MD3 深色 on-surface） ========== -->
-    <color name="md3_on_surface_primary">#F0E6DC</color>
-    <color name="md3_on_surface_secondary">#C9BFB5</color>
-    <color name="md3_on_surface_hint">#938E88</color>
-    <color name="md3_on_surface_disabled">#6B6660</color>
+    <!-- ========== 文字层级（MD3 深色中性 on-surface） ========== -->
+    <color name="md3_on_surface_primary">#E8E8E8</color>
+    <color name="md3_on_surface_secondary">#B0B0B0</color>
+    <color name="md3_on_surface_hint">#808080</color>
+    <color name="md3_on_surface_disabled">#5A5A5A</color>
 
-    <color name="text_primary">#F0E6DC</color>
-    <color name="text_secondary">#C9BFB5</color>
-    <color name="text_tertiary">#938E88</color>
-    <color name="text_hint">#938E88</color>
-    <color name="text_disabled">#6B6660</color>
-    <color name="text_on_brand">#5B2E00</color>
+    <color name="text_primary">#E8E8E8</color>
+    <color name="text_secondary">#B0B0B0</color>
+    <color name="text_tertiary">#808080</color>
+    <color name="text_hint">#808080</color>
+    <color name="text_disabled">#5A5A5A</color>
+    <color name="text_on_brand">#1A1A1A</color>
 
-    <!-- ========== Tab / 图标底板（MD3 深色 primary-container 选中态） ========== -->
-    <color name="tab_selected_bg">#6B3B1F</color>
-    <color name="tab_icon_selected">#FFDBCC</color>
-    <color name="tab_icon_idle">#C9BFB5</color>
-    <color name="tab_text_selected">#FFDBCC</color>
-    <color name="tab_text_idle">#C9BFB5</color>
-    <color name="icon_tile">#2C2520</color>
-    <color name="icon_on_tile">#C9BFB5</color>
+    <!-- ========== Tab / 图标底板（深色选中态 = 中性灰容器） ========== -->
+    <color name="tab_selected_bg">#383838</color>
+    <color name="tab_icon_selected">#E8E8E8</color>
+    <color name="tab_icon_idle">#B0B0B0</color>
+    <color name="tab_text_selected">#E8E8E8</color>
+    <color name="tab_text_idle">#B0B0B0</color>
+    <color name="icon_tile">#242424</color>
+    <color name="icon_on_tile">#B0B0B0</color>
 
-    <!-- ========== 语义色（MD3 深色 错误/成功/警告角色） ========== -->
-    <color name="md3_error">#FFB4AB</color>
-    <color name="md3_on_error">#690005</color>
-    <color name="md3_error_container">#93000A</color>
-    <color name="md3_success">#8FD183</color>
-    <color name="md3_warning">#FFC24D</color>
+    <!-- ========== 语义色（极低饱和灰调，仅作状态辨识） ========== -->
+    <color name="md3_error">#E89A9A</color>
+    <color name="md3_on_error">#3A0D0D</color>
+    <color name="md3_error_container">#5A1E1E</color>
+    <color name="md3_success">#9AD0A8</color>
+    <color name="md3_warning">#E6CB8A</color>
 
-    <color name="danger">#FFB4AB</color>
-    <color name="danger_pressed">#FFD0C8</color>
-    <color name="danger_container">#93000A</color>
-    <color name="success">#8FD183</color>
-    <color name="warning">#FFC24D</color>
+    <color name="danger">#E89A9A</color>
+    <color name="danger_pressed">#F0B0B0</color>
+    <color name="danger_container">#5A1E1E</color>
+    <color name="success">#9AD0A8</color>
+    <color name="warning">#E6CB8A</color>
+    <!-- 应用图标（NEW：原先硬编码在 drawable/ic_launcher.xml 里） -->
+    <color name="ic_launcher_cloud">#2A2A2A</color>
+    <color name="ic_launcher_arrow">#E8E8E8</color>
 </resources>

@@ -193,12 +193,33 @@ public final class RootModulesHelp {
         return null;
     }
 
+    /**
+     * POSIX shell 单引号转义（MED-17）：
+     * runSu 用 `su -c <command>` 执行，命令串仍会被 shell 解析——路径含空格 / ; / $ / 反引号时
+     * 不加引号会被拆成多个参数甚至直接命令注入。单引号包裹并把内嵌单引号转义为 '\''。
+     */
+    static String shellQuote(String s) {
+        if (s == null) return "''";
+        return "'" + s.replace("'", "'\\''") + "'";
+    }
+
+    /** 用空格连接多个路径，逐项转义 */
+    private static String quoteJoin(List<String> paths) {
+        var sb = new StringBuilder();
+        for (var p : paths) {
+            if (p == null || p.isEmpty()) continue;
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(shellQuote(p));
+        }
+        return sb.toString();
+    }
+
     public static String buildListCommand(String tarPath) {
-        return "tar -tf " + tarPath;
+        return "tar -tf " + shellQuote(tarPath);
     }
 
     public static String buildExtractCommand(String tarPath) {
-        return "tar -xf " + tarPath + " -C /";
+        return "tar -xf " + shellQuote(tarPath) + " -C /";
     }
 
     /** 恢复后修正 SELinux 上下文（toybox restorecon；不存在时由调用方忽略失败） */
@@ -323,15 +344,15 @@ public final class RootModulesHelp {
      * 输出每行一个存在的路径。
      */
     public static String buildProbeCommand() {
-        return "ls -d " + String.join(" ", SOURCE_PATHS) + " 2>/dev/null";
+        return "ls -d " + quoteJoin(java.util.Arrays.asList(SOURCE_PATHS)) + " 2>/dev/null";
     }
 
-    /** 打包命令：仅包含探测到的现存目录（无空格路径，可安全拼接） */
+    /** 打包命令：仅包含探测到的现存目录（路径逐项转义，MED-17） */
     public static String buildTarCommand(String outTarPath, List<String> existingPaths) {
         // chmod 644：su(FUSE 归因 owner=本应用 uid) 打包后默认 660，宿主 com.miui.backup
         // (uid 6100) 无读权 → ArchiveHelper "Not exist or bad path"（真机实测）
-        return "tar -cf " + outTarPath + " " + String.join(" ", existingPaths)
-                + " && chmod 644 " + outTarPath;
+        return "tar -cf " + shellQuote(outTarPath) + " " + quoteJoin(existingPaths)
+                + " && chmod 644 " + shellQuote(outTarPath);
     }
 
     /**

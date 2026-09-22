@@ -17,7 +17,7 @@
 
         <TextView
             android:id="@+id/tv_webview_title"
-            style="@style/XmTextPageTitle"
+            style="@style/XmTextSection"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -27,8 +27,8 @@
 
         <Button
             android:id="@+id/btn_webview_done"
-            style="@style/XmButtonPrimary"
-            android:layout_width="wrap_content"
+            style="@style/XmButtonTopAction"
+            android:layout_marginStart="@dimen/space_12"
             android:text="@string/webview_login_done" />
     </LinearLayout>
 

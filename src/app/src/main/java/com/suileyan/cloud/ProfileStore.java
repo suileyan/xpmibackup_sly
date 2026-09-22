@@ -37,6 +37,27 @@ public final class ProfileStore {
         return load().profiles;
     }
 
+    /**
+     * 方案文件版本戳（mtime，文件不存在返回 0）。
+     *
+     * 供 ProviderRegistry 做跨进程缓存失效比对：模块 UI 进程与宿主进程（com.miui.backup）
+     * 各持一份静态 Provider 缓存，in-process 的 invalidate() 传不过去——UI 侧改了方案
+     * （例如把「电脑备份」从局域网切到 USB 通道）后，宿主会继续用旧地址直到进程重启。
+     * 一次 stat 即可判定，不读文件、无解析开销。
+     */
+    public static long stamp() {
+        try {
+            com.suileyan.comm.ConfigHelp.ensureSlyLayout();
+            var file = new File(PROFILE_FILE);
+            if (!file.exists()) return 0L;
+            // mtime 之外再掺入文件长度：/sdcard（FAT/FUSE）的 mtime 粒度可达 1~2s，
+            // 同一秒内两次保存方案时 mtime 可能不变，跨进程失效就会漏掉（宿主继续用旧 Provider）
+            return file.lastModified() * 31L + file.length();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
     public static synchronized Profile get(String id) {
         if (id == null || id.isEmpty()) return null;
         ensureMigrated();
@@ -158,7 +179,10 @@ public final class ProfileStore {
                 arr.put(p.toJson());
             }
             root.put(KEY_PROFILES, arr);
-            AtomicFile.write(file, root.toString().getBytes(StandardCharsets.UTF_8));
+            // MED-11：写失败（磁盘满/权限/锁竞争）不再静默——否则"保存成功"的提示是假的，重启后方案丢失
+            if (!AtomicFile.write(file, root.toString().getBytes(StandardCharsets.UTF_8))) {
+                LogHelp.e(TAG, "save profiles failed: atomic write returned false: " + file.getAbsolutePath());
+            }
         } catch (Exception e) {
             LogHelp.e(TAG, "save profiles failed", e);
         }

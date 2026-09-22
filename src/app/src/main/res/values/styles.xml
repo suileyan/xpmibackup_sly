@@ -195,6 +195,25 @@
         <item name="android:paddingBottom">0dp</item>
     </style>
 
+    <!--
+      顶部标题栏右侧动作（主 CTA 配色的紧凑胶囊）。
+      不能直接用 XmButtonPrimary：它继承 XmButton 的 48dp minHeight 且没有水平内边距，
+      放进 56dp 标题栏后胶囊被压成一根窄条、"完成"二字还会被裁掉（真机实测）。
+    -->
+    <style name="XmButtonTopAction" parent="XmButton">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:paddingStart">@dimen/space_16</item>
+        <item name="android:paddingEnd">@dimen/space_16</item>
+        <item name="android:paddingTop">@dimen/space_6</item>
+        <item name="android:paddingBottom">@dimen/space_6</item>
+        <item name="android:letterSpacing">0.02</item>
+        <item name="android:background">@drawable/bg_button_primary</item>
+        <item name="android:textColor">@color/md3_on_primary</item>
+    </style>
+
     <!-- ==================== 顶部标题栏 ==================== -->
     <style name="XmTopBar">
         <item name="android:layout_width">match_parent</item>

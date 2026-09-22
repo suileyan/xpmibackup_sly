@@ -35,17 +35,16 @@ public class ScriptHelpFragment extends Fragment {
     }
 
     private String readHelpText() {
-        try {
-            var is = getResources().openRawResource(R.raw.script_help);
-            var bytes = new byte[is.available()];
-            var read = 0;
-            while (read < bytes.length) {
-                var n = is.read(bytes, read, bytes.length - read);
-                if (n < 0) break;
-                read += n;
+        try (var is = getResources().openRawResource(R.raw.script_help)) {
+            // MED-26：不能用 is.available() 当长度分配数组——它只是"当前可无阻塞读取的字节数"，
+            // 部分 ROM 对 raw 资源返回 0，会直接得到空白帮助页。
+            var buf = new java.io.ByteArrayOutputStream();
+            var chunk = new byte[8192];
+            int n;
+            while ((n = is.read(chunk)) > 0) {
+                buf.write(chunk, 0, n);
             }
-            is.close();
-            return new String(bytes, 0, read, StandardCharsets.UTF_8);
+            return new String(buf.toByteArray(), StandardCharsets.UTF_8);
         } catch (Exception e) {
             return "";
         }

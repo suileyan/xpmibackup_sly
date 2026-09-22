@@ -218,33 +218,109 @@ public class BackupFragment extends Fragment {
         autoScanPc();
     }
 
-    /** 扫描结果落地：已配对电脑在场 → 验证凭据有效性 → 静默刷新状态；否则对未忽略的电脑弹连接询问 */
+    /**
+     * 扫描结果落地：已配对电脑在场 → 验证凭据有效性 → 静默刷新状态；否则对未忽略的电脑弹连接询问。
+     *
+     * 传输优先级（USB > 局域网）：原实现只按 pc_paired_addr 字符串相等选路——配对时走的是
+     * 哪条通道就永远走哪条，插上 USB 也不会切过来（真机记录见 docs/PC-LAN-DIAGNOSIS.md §2.2，
+     * pc_paired_addr 由 127.0.0.1:8321(USB) 变成 192.168.31.83:8321(局域网) 后一直走局域网）。
+     * 现在改为：USB 通道在场且能确认是同一台电脑 → 把方案地址切到 USB；USB 不在场则回落局域网。
+     */
     private void handlePcFound(List<PcDiscovery.PcInfo> found) {
+        found = PcDiscovery.usbFirst(found); // USB 条目稳定排在前面（未配对时的首选）
         pcFound = found;
         if (found.isEmpty()) {
             updatePcStatusText(null);
             return;
         }
-        var pairedAddr = ConfigHelp.getString("pc_paired_addr", "");
-        for (var f : found) {
-            if ((f.host + ":" + f.port).equals(pairedAddr)) {
-                updatePcStatusText(f); // 已配对的电脑在场，静默确认在线
-                // 每 60s 验证一次凭据有效性；401 时自动清除配对，触发重新配对
-                if (System.currentTimeMillis() - pcCredCheckAt > 60_000) {
-                    pcCredCheckAt = System.currentTimeMillis();
-                    verifyPcCredOrRePair(f);
-                }
-                return;
+        var paired = pickPairedRoute(found);
+        if (paired != null) {
+            updatePcStatusText(paired); // 已配对的电脑在场，静默确认在线
+            // 每 60s 验证一次凭据有效性；401 时自动清除配对，触发重新配对
+            if (System.currentTimeMillis() - pcCredCheckAt > 60_000) {
+                pcCredCheckAt = System.currentTimeMillis();
+                verifyPcCredOrRePair(paired);
             }
+            return;
         }
         for (var f : found) {
-            var addr = f.host + ":" + f.port;
-            if (pcIgnored.contains(addr)) continue;
+            if (pcIgnored.contains(f.addr())) continue;
             updatePcStatusText(null);
             showPcConnectDialog(f);
             return;
         }
         updatePcStatusText(found.get(0));
+    }
+
+    /**
+     * 为「已配对的那台电脑」挑本次扫描中该用的条目，并把方案的传输通道切过去；未配对/无法确认则返回 null。
+     *
+     * 通道切换只在能确认是同一台电脑时进行（mibackpc /miback/info 上报的 name 即电脑主机名）：
+     * 点对点 USB 隧道只能连到「插着的那台电脑」，若它与已配对的不是同一台，切过去会把备份
+     * 写到别的机器上（且对方 WebDAV 账号不同，必然 401）。名字对不上就不动，退回弹窗让用户确认。
+     */
+    private PcDiscovery.PcInfo pickPairedRoute(List<PcDiscovery.PcInfo> found) {
+        var pairedAddr = ConfigHelp.getString("pc_paired_addr", "");
+        var paired = PcDiscovery.byAddr(found, pairedAddr);
+        var usb = PcDiscovery.firstUsb(found);
+        // 1) USB 优先：USB 在场且当前不是走 USB → 切过去
+        if (usb != null && (paired == null || !paired.usb) && samePc(usb, paired)) {
+            switchPcTransport(usb);
+            return usb;
+        }
+        if (paired != null) return paired;
+        // 2) 回落局域网：配对的 USB 通道已不在（拔线/宿主重启/adb server 重启），
+        //    但同名的局域网条目在场 → 切回局域网，用户不用重新配对
+        if (usb == null) {
+            var name = ConfigHelp.getString("pc_paired_name", "");
+            if (!name.isEmpty()) {
+                for (var f : found) {
+                    if (!f.usb && name.equals(f.name)) {
+                        switchPcTransport(f);
+                        return f;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /** USB 条目与已配对电脑是否同一台：优先与本次扫描到的配对条目比名字，其次与落盘的 pc_paired_name 比 */
+    private boolean samePc(PcDiscovery.PcInfo usb, PcDiscovery.PcInfo paired) {
+        if (usb.name == null || usb.name.isEmpty()) return false; // 拿不到名字就不做通道切换
+        if (paired != null && paired.name != null && !paired.name.isEmpty()) {
+            return usb.name.equals(paired.name);
+        }
+        return usb.name.equals(ConfigHelp.getString("pc_paired_name", ""));
+    }
+
+    /**
+     * 把「电脑备份」方案切到指定传输通道（只改地址，凭据与方案 id 不动）。
+     *
+     * mibackpc 的 WebDAV 账号是电脑级全局单账号（pairHandler 只按来源 IP 限制下发、
+     * 不按来源 IP 轮换凭据），同一台电脑换通道不需要重新配对；ProfileStore.upsertByName
+     * 按方案名复用原 id，因此 EncryptedCredStore 里的 webdav_pass 仍然对得上。
+     */
+    private void switchPcTransport(PcDiscovery.PcInfo pc) {
+        try {
+            if (pc.addr().equals(ConfigHelp.getString("pc_paired_addr", ""))) return;
+            var profile = findPcProfile();
+            if (profile == null) return;
+            var oldUrl = profile.params.get("webdav_url");
+            var params = new java.util.LinkedHashMap<>(profile.params);
+            params.put("webdav_url", pc.davUrl());
+            // 传入同 id：upsertByName 走 add() 分支按 id 覆盖，方案 id 与凭据位置保持不变
+            ProfileStore.upsertByName(PC_PROFILE_NAME,
+                    new Profile(profile.id, PC_PROFILE_NAME, Profile.TYPE_WEBDAV, profile.createdAt, params));
+            var cfg = ConfigHelp.load();
+            cfg.put("pc_paired_addr", pc.addr());
+            cfg.put("pc_paired_name", pc.name);
+            ConfigHelp.save(cfg);
+            com.suileyan.comm.LogHelp.i("XpMiBackup", "PC 传输通道切换为 " + (pc.usb ? "USB" : "局域网")
+                    + "：" + oldUrl + " → " + pc.davUrl());
+        } catch (Exception e) {
+            com.suileyan.comm.LogHelp.w("XpMiBackup", "切换 PC 传输通道失败", e);
+        }
     }
 
     /** 后台验证已配对 PC 的 WebDAV 凭据；401 时清除配对状态并触发重新配对 */
@@ -259,7 +335,19 @@ public class BackupFragment extends Fragment {
                 var ok = com.suileyan.comm.ConfigHelp.withAccount(params,
                         (java.util.concurrent.Callable<Boolean>) com.suileyan.comm.WebdavFileHelp::testConnection);
                 if (Boolean.TRUE.equals(ok)) return;
-            } catch (Exception ignored) {
+            } catch (com.suileyan.cloud.CloudException ce) {
+                // 只有真正的认证失败（401/403）才认定凭据失效。网络层/远端瞬时故障
+                // （超时、主机不可达、通道刚建立还会抖）不清配对——否则一次网络抖动
+                // 就要用户重新配对，而新切换的传输通道恰好最容易在头几秒抖动
+                if (!ce.isAuthExpired()) {
+                    com.suileyan.comm.LogHelp.i("XpMiBackup",
+                            "PC 连接校验未通过（非认证失败，保留配对）：" + ce.getMessage());
+                    return;
+                }
+            } catch (Exception e) {
+                com.suileyan.comm.LogHelp.i("XpMiBackup", "PC 连接校验异常（保留配对）："
+                        + e.getClass().getSimpleName() + ": " + e.getMessage());
+                return;
             }
             // 凭据失效：清除配对状态
             com.suileyan.comm.LogHelp.w("XpMiBackup", "PC 凭据已失效（401），清除配对状态以触发重新配对");
@@ -327,7 +415,7 @@ public class BackupFragment extends Fragment {
                 if (r.status == PcPair.Result.Status.APPROVED) {
                     onPcPaired(pc, r);
                 } else if (r.status == PcPair.Result.Status.DENIED) {
-                    pcIgnored.add(pc.host + ":" + pc.port);
+                    pcIgnored.add(pc.addr());
                     Toast.makeText(getActivity(), R.string.pc_pair_denied, Toast.LENGTH_LONG).show();
                 } else {
                     Toast.makeText(getActivity(), R.string.pc_pair_timeout, Toast.LENGTH_LONG).show();

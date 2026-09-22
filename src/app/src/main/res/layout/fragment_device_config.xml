@@ -42,6 +42,7 @@
                 android:id="@+id/et_device_name"
                 style="@style/XmInput"
                 android:hint="@string/device_name_hint"
+                android:imeOptions="actionNext"
                 android:inputType="text"
                 android:layout_marginBottom="@dimen/field_gap" />
 
@@ -56,6 +57,7 @@
                 android:id="@+id/et_device_describe"
                 style="@style/XmInput"
                 android:hint="@string/device_description_hint"
+                android:imeOptions="actionNext"
                 android:inputType="text"
                 android:layout_marginBottom="@dimen/field_gap" />
 
@@ -77,6 +79,7 @@
                 android:id="@+id/et_backup_path"
                 style="@style/XmInput"
                 android:hint="@string/backup_path_hint"
+                android:imeOptions="actionNext"
                 android:inputType="text"
                 android:layout_marginBottom="@dimen/field_gap" />
 
@@ -98,6 +101,7 @@
                 android:id="@+id/et_backup_max"
                 style="@style/XmInput"
                 android:hint="5"
+                android:imeOptions="actionDone"
                 android:inputType="number" />
         </LinearLayout>
 

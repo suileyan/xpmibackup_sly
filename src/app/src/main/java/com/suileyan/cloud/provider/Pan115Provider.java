@@ -211,7 +211,11 @@ public class Pan115Provider implements CloudProvider {
             }
             var count = json.optInt("count", 0);
             offset += PAGE_SIZE;
-            if (offset >= count || arr == null || arr.length() == 0) break;
+            if (arr == null || arr.length() == 0) break;
+            // MED-06：不能只用 count 终止——count 缺省为 0 时首页后即退出（大目录被静默截断为首页）。
+            // 增加"本页不足一页即结束"的兜底（TianyiProvider 同样如此）。
+            if (arr.length() < PAGE_SIZE) break;
+            if (count > 0 && offset >= count) break;
         }
         return out;
     }
@@ -249,12 +253,12 @@ public class Pan115Provider implements CloudProvider {
         for (var i = 0; i < arr.length(); i++) {
             var o = arr.optJSONObject(i);
             if (o != null && parts[1].equals(o.optString("n", ""))) {
-                // 诊断：打印匹配条目的全部字段（115 新版列表可能精简字段，pickcode 名须实证）
+                // HIGH-10：不再打印条目全字段——keys 含 pickcode（可换取下载直链）等凭据性数据，
+                // 截断不能消除风险。只保留字段名清单用于诊断。
                 var ks = new java.util.ArrayList<String>();
                 var kit = o.keys();
                 while (kit.hasNext()) ks.add(kit.next());
-                LogHelp.i(TAG, "115 findEntry match: " + parts[1]
-                        + " keys=" + ks + " resp=" + truncate(o.toString(), 400));
+                LogHelp.i(TAG, "115 findEntry match: " + parts[1] + " keys=" + ks);
                 return o;
             }
         }
@@ -307,9 +311,13 @@ public class Pan115Provider implements CloudProvider {
 
     /** getid 查询（目录不存在返回 null）；path 为相对路径（去前导 /） */
     private String getIdByPath(String relPath) throws CloudException {
+        // HIGH-02：风控冷却期不能静默返回 null —— null 的语义是"未知"而不是"不存在"：
+        // resolveCid(!createMissing) 会据此返回 null，listEntries 最终静默返回空 ArrayList，
+        // 恢复列表变成空白且没有任何报错线索（与本项目历史根因「HTTP 200 + 错误体当空成功」同质）。
+        // 直接上抛，把风控提示透传到 UI。
         if (inRiskWindow()) {
-            // 风控冷却期：跳过请求（listEntries 会因此枚举失败，但避免持续 405 刷屏/加重风控）
-            return null;
+            throw new CloudException(CloudException.Kind.REMOTE,
+                    "115 风控冷却中（请等待数分钟，或网页端登录 115.com 验证后重试）");
         }
         var params = new LinkedHashMap<String, String>();
         params.put("path", relPath);
@@ -458,7 +466,8 @@ public class Pan115Provider implements CloudProvider {
                 .header("User-Agent", OSS_UA)
                 .post(mb.build())
                 .build();
-        var resp = execute(req);
+        // MED-07：OSS 直传此前走裸 execute()，没有退避重试也不短路风控，与列表行为不一致
+        var resp = executeWithRetry(() -> execute(req));
         if (resp.code < 200 || resp.code >= 300) {
             throw new CloudException(CloudException.Kind.REMOTE,
                     "115 OSS POST 上传 HTTP " + resp.code + ": " + truncate(resp.body, 300));
@@ -555,7 +564,8 @@ public class Pan115Provider implements CloudProvider {
                 .header("User-Agent", UA)
                 .header("Referer", REFERER)
                 .post(form);
-        var resp = execute(builder.build());
+        // MED-07：downurl 此前走裸 execute()，风控期不短路、5xx 不重试
+        var resp = executeWithRetry(() -> execute(builder.build()));
         if (resp.code < 200 || resp.code >= 300) {
             throw new CloudException(CloudException.Kind.REMOTE,
                     "115 downurl HTTP " + resp.code + ": " + truncate(resp.body, 200));
@@ -692,16 +702,16 @@ public class Pan115Provider implements CloudProvider {
     /** 请求统一出口：HTTP 429/5xx 退避重试；最终 parseApiResponse 映射错误 */
     private JSONObject withRetry(ApiCall call) throws CloudException {
         // 风控冷却期：所有 115 API 请求短路（getid/files/downurl 等）——避免反复请求加重风控、延长风控时长
-        if (inRiskWindow()) {
-            throw new CloudException(CloudException.Kind.REMOTE,
-                    "115 风控冷却中（请等待数分钟，或网页端登录 115.com 验证后重试）");
-        }
+        checkRiskWindow();
         var last = new HttpResponse();
         for (var attempt = 0; attempt <= MAX_RETRY; attempt++) {
             if (attempt > 0) {
                 try {
                     Thread.sleep(500L * attempt);
-                } catch (InterruptedException ignored) {
+                } catch (InterruptedException ie) {
+                    // MED-09：吞中断会让取消信号丢失、重试循环无法提前终止
+                    Thread.currentThread().interrupt();
+                    throw new CloudException(CloudException.Kind.NETWORK, "115 请求被中断", ie);
                 }
             }
             last = call.run();
@@ -711,6 +721,40 @@ public class Pan115Provider implements CloudProvider {
             return parseApiResponse(last);
         }
         throw new CloudException(CloudException.Kind.REMOTE, "115 API 重试耗尽 HTTP " + last.code);
+    }
+
+    /**
+     * 原始响应请求（非 JSON 业务响应：OSS 直传、downurl）也走统一退避重试 + 风控短路（MED-07）。
+     * 与 withRetry 的差异：不做 parseApiResponse 的业务码映射，响应原样返回给调用方判定。
+     * OSS 上传体是可重放的（每次 writeTo 重新打开本地文件），同一 object key 重传幂等。
+     */
+    private HttpResponse executeWithRetry(ApiCall call) throws CloudException {
+        checkRiskWindow();
+        var last = new HttpResponse();
+        for (var attempt = 0; attempt <= MAX_RETRY; attempt++) {
+            if (attempt > 0) {
+                try {
+                    Thread.sleep(500L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new CloudException(CloudException.Kind.NETWORK, "115 请求被中断", ie);
+                }
+            }
+            last = call.run();
+            if (last.code == 429 || last.code >= 500) {
+                continue;
+            }
+            return last;
+        }
+        throw new CloudException(CloudException.Kind.REMOTE, "115 API 重试耗尽 HTTP " + last.code);
+    }
+
+    /** 风控冷却期统一短路：不发起任何 115 请求（OSS 直传与 API 共用） */
+    private static void checkRiskWindow() throws CloudException {
+        if (inRiskWindow()) {
+            throw new CloudException(CloudException.Kind.REMOTE,
+                    "115 风控冷却中（请等待数分钟，或网页端登录 115.com 验证后重试）");
+        }
     }
 
     /** GET 无参（如 check/sso、getuploadinfo） */

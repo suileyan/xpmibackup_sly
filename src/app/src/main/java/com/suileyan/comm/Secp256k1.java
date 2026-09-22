@@ -119,10 +119,15 @@ public final class Secp256k1 {
         return fromSlope(a, b, slope);
     }
 
+    /** 2 的常量：绝不能用 {@code BigInteger.TWO} —— 它直到 API 33 才存在，
+     *  在 minSdk 30 的设备（Android 11/12）上取该字段抛的是 NoSuchFieldError（属 Error，
+     *  catch (Exception) 拦不住），PC 配对的 ECDH 会直接崩进程。 */
+    private static final BigInteger TWO = BigInteger.valueOf(2L);
+
     /** 二倍：λ = (3x²)/(2y) mod p（曲线 a=0，无 a 项） */
     private static Point twice(Point a) {
         if (a.isZero() || a.y.signum() == 0) return ZERO;
-        var slope = a.x.modPow(BigInteger.TWO, P)
+        var slope = a.x.modPow(TWO, P)
                 .multiply(BigInteger.valueOf(3)).mod(P)
                 .multiply(a.y.shiftLeft(1).mod(P).modInverse(P)).mod(P);
         return fromSlope(a, a, slope);
@@ -130,7 +135,7 @@ public final class Secp256k1 {
 
     /** 由斜率求第三交点并翻转 y：x3 = λ²-x1-x2，y3 = λ(x1-x3)-y1 */
     private static Point fromSlope(Point a, Point b, BigInteger slope) {
-        var x3 = slope.modPow(BigInteger.TWO, P).subtract(a.x).subtract(b.x).mod(P);
+        var x3 = slope.modPow(TWO, P).subtract(a.x).subtract(b.x).mod(P);
         var y3 = slope.multiply(a.x.subtract(x3)).subtract(a.y).mod(P);
         return new Point(x3, y3);
     }

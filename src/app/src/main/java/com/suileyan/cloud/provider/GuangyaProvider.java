@@ -106,6 +106,10 @@ public class GuangyaProvider implements CloudProvider {
         for (var e : listParent(ROOT_ID)) {
             if (e.directory) out.add(e.name);
         }
+        // 「恢复列表为空」时，这行是唯一能区分"云端确实没有备份目录"与"接口返回了异常结构"的依据；
+        // 失败路径由 CloudFileHelp.listDirs 的 catch 记 listDirs failed 覆盖
+        LogHelp.i(TAG, "光鸭 listDirs root=" + truncate(ROOT_ID, 24) + " 目录数=" + out.size()
+                + (out.isEmpty() ? "" : " names=" + out));
         return out;
     }
 
@@ -263,11 +267,18 @@ public class GuangyaProvider implements CloudProvider {
                     }
                 }
             }
-            // 诊断：下载完整性——本地大小 vs 云端 size（"备份文件损坏"= 下载截断或上传本身损坏，先区分）
+            // 完整性校验（CRIT-03）：流式拷贝结束后必须核对字节数——服务端中断/连接被切断时
+            // 旧实现只打 **SIZE-MISMATCH** 日志仍返回 OK，恢复侧表现为「备份文件损坏」。
+            // Baidu/Quark/Pan123 均有长度校验，此处补齐。
             var localLen = new File(localPath).length();
+            if (entry.size > 0 && localLen != entry.size) {
+                LogHelp.e(TAG, "光鸭 download 截断 name=" + name
+                        + " local=" + localLen + " remote=" + entry.size);
+                throw new CloudException(CloudException.Kind.REMOTE,
+                        "光鸭下载不完整: " + localLen + "/" + entry.size + " (" + remotePath + ")");
+            }
             LogHelp.i(TAG, "光鸭 download done name=" + name
-                    + " local=" + localLen + " remote=" + entry.size
-                    + (localLen == entry.size ? "" : " **SIZE-MISMATCH**"));
+                    + " local=" + localLen + " remote=" + entry.size);
             return "OK: " + remotePath + " -> " + localPath;
         } catch (CloudException e) {
             throw e;
@@ -464,6 +475,21 @@ public class GuangyaProvider implements CloudProvider {
         for (var guard = 0; guard < 200; guard++) {
             var json = callApi("/userres/v1/file/get_file_list", listBody(pid, page, 50));
             var data = json.optJSONObject("data");
+            // 响应里连 data 都没有 = 接口报业务错（callApi 只看 HTTP 状态，管不到这一层）。
+            // 旧实现直接当"空列表"返回，于是"目录明明存在"却解析成不存在：
+            // 恢复列表为空、descript.xml 报"文件不存在"都是这么来的（实测 parent= 为空的查询必现）。
+            if (data == null) {
+                if ((pid == null || pid.isEmpty())) {
+                    // 根目录用空 id 会被服务端拒（实测返回无 data）。换 "0" 再试一次；
+                    // 递归时 pid 已是 "0"，不会再进这个分支
+                    LogHelp.w(TAG, "光鸭 get_file_list 根目录空 id 失败，改用 \"0\" 重试: "
+                            + truncate(json.toString(), 200));
+                    return collectEntries("0");
+                }
+                throw new CloudException(CloudException.Kind.REMOTE,
+                        "光鸭 get_file_list 响应缺少 data（parentId=" + truncate(pid, 24) + "）: "
+                                + truncate(json.toString(), 200));
+            }
             // 诊断：打印 data 全部键 + list/fileList 每项 fileName——定位"响应 total=8 含 part 但解析后只有 5 项"的丢失点
             var keys = new StringBuilder();
             if (data != null) {

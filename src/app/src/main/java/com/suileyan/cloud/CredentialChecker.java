@@ -98,7 +98,17 @@ public final class CredentialChecker {
         return Status.VALID;
     }
 
-    /** 连通性测试：成功=VALID；认证过期=INVALID；其余异常=ERROR */
+    /**
+     * 连通性测试：成功=VALID；认证过期=INVALID；其余异常=ERROR。
+     *
+     * MED-05：false 一律判 INVALID 会把「网络抖动/临时不可达」误报成「凭证失效」，
+     * 与 RetryPolicy 的 NETWORK 可重试语义矛盾。修法不是在这里放宽判定，而是让
+     * 各 provider 的 testConnection 只在真正判定失败时返回 false：
+     * - SMB：失败直接抛异常（SmbFileHelp.testConnection）；
+     * - WebDAV：非 207 时按状态码抛 AUTH_EXPIRED / REMOTE（WebdavFileHelp.testConnection）；
+     * - 自定义脚本：false 是脚本自己给出的明确结论（脚本契约要求返回 true/false）。
+     * 因此此处返回 false 只代表「provider 明确判定不可用」。
+     */
     private static Status test(CloudProvider provider) {
         try {
             return provider.testConnection() ? Status.VALID : Status.INVALID;

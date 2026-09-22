@@ -157,11 +157,89 @@ public class LogHelp {
     }
 
     /**
+     * 文件日志写入器缓存（MED-31）。
+     * 早期实现每条日志都 FileOutputStream open→write→close，高频日志（备份进度）会产生
+     * 大量系统调用与主线程 I/O 抖动。这里按文件复用 BufferedWriter：
+     * ERROR 级立即 flush（保证关键日志不丢），其余按 1s 节流 flush。
+     * 崩溃堆栈另有 CrashLog 独立落盘，不受此缓冲影响。
+     */
+    private static final java.util.Map<String, WriterHolder> WRITERS = new java.util.HashMap<>();
+    /** 写入器数量上限（跨天会产生新路径，超限时关闭最旧的一个） */
+    private static final int WRITERS_MAX = 6;
+
+    private static final class WriterHolder {
+        final BufferedWriter writer;
+        long lastFlush;
+
+        WriterHolder(BufferedWriter writer) {
+            this.writer = writer;
+        }
+    }
+
+    /** 追加文本到指定日志文件（复用缓冲写入器） */
+    private static void appendToFile(String path, String text, boolean flushNow) {
+        synchronized (WRITERS) {
+            try {
+                var holder = WRITERS.get(path);
+                if (holder == null) {
+                    var file = new File(path);
+                    var dir = file.getParentFile();
+                    if (dir != null && !dir.exists() && !dir.mkdirs()) {
+                        return;
+                    }
+                    holder = new WriterHolder(new BufferedWriter(new OutputStreamWriter(
+                            new FileOutputStream(file, true), StandardCharsets.UTF_8)));
+                    if (WRITERS.size() >= WRITERS_MAX) {
+                        var oldest = WRITERS.keySet().iterator().next();
+                        closeWriter(oldest);
+                    }
+                    WRITERS.put(path, holder);
+                }
+                holder.writer.write(text);
+                var now = System.currentTimeMillis();
+                if (flushNow || now - holder.lastFlush >= 1000L) {
+                    holder.writer.flush();
+                    holder.lastFlush = now;
+                }
+            } catch (Exception e) {
+                // 写失败（磁盘满/权限）：丢弃缓存写入器，下次调用重建
+                closeWriter(path);
+            }
+        }
+    }
+
+    /** 关闭并移除某个文件的缓存写入器 */
+    private static void closeWriter(String path) {
+        var holder = WRITERS.remove(path);
+        if (holder != null) {
+            try {
+                holder.writer.flush();
+                holder.writer.close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** 落盘错误日志前先冲刷缓存，保证"出错前流程"与错误详情顺序一致 */
+    private static void flushAllWriters() {
+        synchronized (WRITERS) {
+            for (var holder : WRITERS.values()) {
+                try {
+                    holder.writer.flush();
+                    holder.lastFlush = System.currentTimeMillis();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    /**
      * 错误日志落盘：将"出错前流程（环形缓冲）+ 本次错误详情"写入 年月日_err.log
      * 双进程（settings/backup）可能并发写同一文件，进程内 synchronized，跨进程竞态可接受
      */
     private static void flushErrorLog(int priority, String tag, String message, String stack) {
         try {
+            flushAllWriters();
             var dir = new File(ERR_LOG_DIR);
             if (!dir.exists() && !dir.mkdirs()) {
                 return;
@@ -245,8 +323,9 @@ public class LogHelp {
 
     /**
      * 日志脱敏：将 URL 内嵌凭据、Basic 头、文本中的敏感参数值替换为 ***，避免 token/cookie/密码落入日志
+     * 包内可见：CrashLog 直接落盘崩溃文本前也必须过同一脱敏（HIGH-07）
      */
-    private static String sanitizeSensitive(String text) {
+    static String sanitizeSensitive(String text) {
         if (text == null || text.isEmpty()) return text;
         var out = SENSITIVE_PARAM.matcher(text).replaceAll("$1***");
         out = URL_USERINFO.matcher(out).replaceAll("$1***@");
@@ -268,10 +347,7 @@ public class LogHelp {
             var date = DAY_FORMAT.get().format(new Date());
             var time = TS_FORMAT.get().format(new Date());
             var file = new File(dir, date + "_web.log");
-            try (var writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), StandardCharsets.UTF_8))) {
-                writer.write(time + " " + sanitizeSensitive(message));
-                writer.newLine();
-            }
+            appendToFile(file.getPath(), time + " " + sanitizeSensitive(message) + "\n", false);
         } catch (Exception ignored) {
         }
     }
@@ -291,14 +367,14 @@ public class LogHelp {
             var date = DAY_FORMAT.get().format(new Date());
             var time = TS_FORMAT.get().format(new Date());
             var file = new File(dir, date + ".log");
-            try (var writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), StandardCharsets.UTF_8))) {
-                writer.write(time + " " + priorityToLetter(priority) + "/" + tag + ": " + message);
-                writer.newLine();
-                if (stack != null) {
-                    writer.write(stack);
-                    writer.newLine();
-                }
+            var sb = new StringBuilder();
+            sb.append(time).append(' ').append(priorityToLetter(priority)).append('/')
+                    .append(tag).append(": ").append(message).append('\n');
+            if (stack != null) {
+                sb.append(stack).append('\n');
             }
+            // ERROR 级立即落盘，其余 1s 节流（MED-31）
+            appendToFile(file.getPath(), sb.toString(), priority >= Log.ERROR);
         } catch (Exception ignored) {
         }
     }

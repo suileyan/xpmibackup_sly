@@ -47,6 +47,95 @@ public class BackupHook {
         hookBackupNotifications();
         hookForegroundNotificationStop();
         hookNasAbort(lpparam);
+        hookNasDeviceProvider(lpparam);
+        hookProgressSpeedBadge(lpparam);
+    }
+
+    /**
+     * 进度页总进度右侧显示实时上传速率。
+     *
+     * 锚点取宿主自己的 {@code com.miui.backup.NumberProgressView}（页面里显示 "45" 的那个自绘 TextView），
+     * 而不是资源 id —— id 会随宿主版本升级漂移，类名与 {@code onAttachedToWindow}（框架方法名）稳定得多。
+     * 由该 view 向上取一层父容器（就是"总进度 + %"那一行），把角标追加到末尾。
+     */
+    private void hookProgressSpeedBadge(XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            var clazz = XposedHelpers.findClassIfExists("com.miui.backup.NumberProgressView", lpparam.classLoader);
+            if (clazz == null) {
+                LogHelp.w(TAG, "NumberProgressView not found, skip speed badge hook");
+                return;
+            }
+            var hook = new XC_MethodHook() {
+                /**
+                 * 视图刚构造出来还没进父容器，post 到 attach 之后执行（View.post 在未 attach 时会
+                 * 进 RunQueue，dispatchAttachedToWindow 时执行）——那时 getParent() 才是进度行
+                 */
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    var view = (View) param.thisObject;
+                    view.post(() -> ProgressSpeedBadge.attach(view));
+                }
+            };
+            // 该类**没有**重写 onAttachedToWindow，所以必须挂构造（hookAllMethods 找不到方法时
+            // 只是静默跳过并留下一条"已 hooked"的假日志，实测角标完全没出现）
+            var constructors = 0;
+            for (var ctor : clazz.getDeclaredConstructors()) {
+                XposedBridge.hookMethod(ctor, hook);
+                constructors++;
+            }
+            // 兜底：进度每次变化都会走 setScore，此时视图必然已在布局里
+            var scores = 0;
+            for (var name : new String[]{"setScore", "setFlipScore"}) {
+                try {
+                    XposedHelpers.findAndHookMethod(clazz, name, Integer.TYPE, hook);
+                    scores++;
+                } catch (Throwable ignored) {
+                }
+            }
+            LogHelp.i(TAG, "NumberProgressView speed badge hooked: constructors=" + constructors + " scoreMethods=" + scores);
+        } catch (Throwable e) {
+            logError("hookProgressSpeedBadge failed", e);
+        }
+    }
+
+    /**
+     * 拦截 com.miui.backup.provider.BackupNasDeviceProvider.query()（HIGH-01）
+     *
+     * 原始方法查询已配对的 NAS 设备列表，无设备时返回空结果；
+     * 注入后返回模拟的 NAS 设备数据（设备 ID、名称、类型），使设置页/备份页显示可用目标。
+     *
+     * 关键：该 ContentProvider 属于 com.miui.backup，query 在宿主进程执行。
+     * 早期实现把它挂在 SettingsHook（只注入 com.android.settings），
+     * 那里 findClassIfExists 恒为 null —— hook 永不生效（只留一行 skip 日志）。
+     */
+    private void hookNasDeviceProvider(XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            var clazz = XposedHelpers.findClassIfExists("com.miui.backup.provider.BackupNasDeviceProvider", lpparam.classLoader);
+            if (clazz == null) {
+                LogHelp.w(TAG, "BackupNasDeviceProvider not found, skip provider hook");
+                return;
+            }
+            final var deviceId = com.suileyan.comm.ConfigHelp.getString("device_id", "");
+            final var deviceName = com.suileyan.comm.ConfigHelp.getString("device_name", "");
+            XposedHelpers.findAndHookMethod(clazz, "query",
+                android.net.Uri.class, String[].class, Bundle.class, android.os.CancellationSignal.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        var cursor = new android.database.MatrixCursor(new String[]{"device_id", "device_name", "device_type"});
+                        cursor.addRow(new Object[]{deviceId, deviceName, "nas"});
+                        var extras = new Bundle();
+                        var deviceList = new java.util.HashMap<String, String>();
+                        deviceList.put(deviceId, deviceName);
+                        extras.putSerializable("key_device_list", deviceList);
+                        cursor.setExtras(extras);
+                        param.setResult(cursor);
+                    }
+                });
+            LogHelp.i(TAG, "BackupNasDeviceProvider.query hooked (device=" + deviceId + ")");
+        } catch (Throwable e) {
+            logError("hookNasDeviceProvider failed", e);
+        }
     }
 
     /**
@@ -548,6 +637,9 @@ public class BackupHook {
      * check-then-clear 在锁内原子完成，防止误清正在进行的备份目录（HIGH-14）
      */
     private static void cleanupActiveBackupDirsAsync() {
+        // 先给上传链路打取消标记，再删云端残留：宿主的取消只收它自己的任务，
+        // 本模块在途/排队的上传不会自己停（实测取消后仍继续传了二十多片分片）
+        com.suileyan.comm.BackupCancel.markCancelled();
         Set<String> dirs;
         synchronized (BACKUP_DIR_LOCK) {
             if (!activeBackupInProgress) {
@@ -616,6 +708,72 @@ public class BackupHook {
             return null;
         }
         return getTaskItem(dataCenter, index);
+    }
+
+    /**
+     * 诊断用：把 taskId 对应任务项的关键字段拼成一行（备份项进度口径排查）。
+     *
+     * 宿主 D0(taskId,current,total) 会先用 NASBackupDataCenter 反查任务项，查不到就整段丢弃
+     * 该次进度（只留一行宿主日志）。备份页表现即「该项进度长期停在 30%」——30 是宿主上传阶段
+     * 的基线起点（见 NASTransferService.H1：非分片任务进度 = 30 + 70 × 已传/总量）。
+     */
+    public static String describeNasTaskItem(ClassLoader classLoader, String taskId) {
+        if (classLoader == null || taskId == null || taskId.isEmpty()) return "n/a";
+        try {
+            var item = findTaskItem(classLoader, taskId);
+            if (item == null) return "unresolved(taskId)";
+            return "pkg=" + diagField(item, "packageName")
+                    + ",transferTaskId=" + diagField(item, "transferTaskId")
+                    + ",state=" + diagField(item, "nasTaskState")
+                    + ",split=" + diagField(item, "mIsSplitTask")
+                    + ",transferSize=" + diagField(item, "transferSize")
+                    + ",totalSize=" + diagField(item, "totalSize")
+                    + ",bakFileSize=" + diagField(item, "bakFileSize")
+                    + ",progress=" + diagField(item, "progress");
+        } catch (Throwable e) {
+            return "describe failed: " + e.getClass().getSimpleName();
+        }
+    }
+
+    /** 诊断用字段读取：字段不存在返回 "?"（版本差异不抛异常） */
+    private static String diagField(Object instance, String name) {
+        try {
+            return String.valueOf(readField(instance, name));
+        } catch (Throwable e) {
+            return "?";
+        }
+    }
+
+    /**
+     * 进度归一化所需的宿主口径：返回 [该项 totalSize, 是否走宿主特殊分支]；拿不到返回 null。
+     *
+     * 宿主 NASTransferService.H1 算的是 `30 + 70 × (transferSize / item.totalSize)`，
+     * 而 totalSize 是宿主自己记录的「该项尺寸」（往往是上次备份的旧值，与本次实际要传的字节
+     * 差几个数量级，实测 短信设置 16.5MB vs 6.2KB、相册 646MB vs 7.7KB），分母偏大 → 进度长期
+     * 贴在 30% 地板上，传完直接跳 100%，界面上就是「一项卡 30% 后走下一项」。
+     *
+     * 例外：com.android.mms / com.android.contacts 的 feature 1|2 项，宿主自己走
+     * (current / item.bakFileSize) × totalSize 的整数除法归一化，必须保持原始字节。
+     */
+    public static long[] nasProgressScale(ClassLoader classLoader, String taskId) {
+        if (classLoader == null || taskId == null || taskId.isEmpty()) return null;
+        try {
+            var item = findTaskItem(classLoader, taskId);
+            if (item == null) return null;
+            var total = ((Number) readField(item, "totalSize")).longValue();
+            var pkg = String.valueOf(readField(item, "packageName"));
+            var feature = -1;
+            try {
+                var f = readField(item, "feature");
+                if (f instanceof Number) feature = ((Number) f).intValue();
+            } catch (Throwable ignored) {
+            }
+            var special = ("com.android.mms".equals(pkg) || "com.android.contacts".equals(pkg))
+                    && (feature == 1 || feature == 2);
+            return new long[]{total, special ? 1L : 0L};
+        } catch (Throwable e) {
+            return null;
+        }
     }
 
     /**

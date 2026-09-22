@@ -22,6 +22,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -55,6 +56,10 @@ type Config struct {
 	User string   `json:"user"`
 	Pass string   `json:"pass"`
 	Pair []string `json:"paired"` // 已配对过的手机设备名（展示用，最新在后，最多保留 8 台）
+
+	// mu 保护 User/Pass/Root/Pair 的并发读写（MED-19/MED-21）：
+	// /api/cred 写 User/Pass 时 davAuth 会并发读，弹窗协程、启动路径也可能同时 save()
+	mu sync.Mutex `json:"-"`
 }
 
 func configPath() string {
@@ -68,6 +73,9 @@ func configPath() string {
 func loadConfig() *Config {
 	c := &Config{Port: 8321, User: "miback"}
 	if b, err := os.ReadFile(configPath()); err == nil {
+		// MED-18：先剥离 UTF-8 BOM。json.Unmarshal 遇 BOM 必失败，随后回落默认配置并
+		// 随机重生成 Pass —— 手机再也连不上，用户只看到「密码不对」。此前只留一条告警。
+		b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
 		// 解析失败必须留痕：曾出现配置文件被写入 BOM 后静默回落默认端口
 		// （表现为「改了配置却没生效」），这里的告警是唯一线索
 		if jerr := json.Unmarshal(b, c); jerr != nil {
@@ -88,7 +96,47 @@ func loadConfig() *Config {
 	return c
 }
 
+// cred 读取 WebDAV 账号密码（加锁快照，供 davAuth / /api/state 使用）
+func (c *Config) cred() (string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.User, c.Pass
+}
+
+// setCred 更新账号密码并落盘（MED-21：写 User/Pass 与并发读 davAuth 之间存在数据竞争）
+func (c *Config) setCred(user, pass string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.User, c.Pass = user, pass
+	c.saveLocked()
+}
+
+// setRoot 更新备份目录并落盘
+func (c *Config) setRoot(root string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Root = root
+	c.saveLocked()
+}
+
+// pairedDevices 已配对设备名快照
+func (c *Config) pairedDevices() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, len(c.Pair))
+	copy(out, c.Pair)
+	return out
+}
+
+// save 加锁落盘（MED-19：此前弹窗协程、/api/root、/api/cred、启动路径可能并发写同一文件，交错写坏配置）
 func (c *Config) save() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.saveLocked()
+}
+
+// saveLocked 调用方须已持有 c.mu
+func (c *Config) saveLocked() {
 	b, _ := json.MarshalIndent(c, "", "  ")
 	_ = os.WriteFile(configPath(), b, 0600)
 }
@@ -98,6 +146,8 @@ func (c *Config) recordPairedDevice(name string) {
 	if name == "" {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, p := range c.Pair {
 		if p == name {
 			return
@@ -107,7 +157,7 @@ func (c *Config) recordPairedDevice(name string) {
 	if len(c.Pair) > 8 {
 		c.Pair = c.Pair[len(c.Pair)-8:]
 	}
-	c.save()
+	c.saveLocked()
 }
 
 // ---------- 实时传输统计（供控制页「备份进度/速度」卡片轮询） ----------
@@ -206,18 +256,21 @@ func (t *liveTracker) finishPUT(connKey string, success bool) {
 // snapshot 返回当前 UI 数据（拷贝后编码）
 func (t *liveTracker) snapshot() map[string]any {
 	t.mu.Lock()
-	active := make([]*liveTransfer, 0, len(t.byConn))
+	// MED-21：必须在持锁期间把 liveTransfer 拷贝成值——feedPUT 持锁写 tf.Recv/tf.Total，
+	// 释放锁后再读就是数据竞争（race detector 可捕获）
+	active := make([]liveTransfer, 0, len(t.byConn))
 	var cur *liveTransfer
 	for k, tf := range t.byConn {
 		if last, ok := t.lastSeen[k]; !ok || time.Since(last) >= 30*time.Second {
 			continue
 		}
-		active = append(active, tf)
-		if tf.Recv > 0 && tf.Path != "" && (cur == nil || tf.Recv > cur.Recv) {
-			cur = tf
+		cp := *tf
+		active = append(active, cp)
+		if cp.Recv > 0 && cp.Path != "" && (cur == nil || cp.Recv > cur.Recv) {
+			cur = &cp
 		}
 	}
-	bytes, files := t.sessionBytes, t.sessionFiles
+	bytes_, files := t.sessionBytes, t.sessionFiles
 	t.mu.Unlock()
 
 	sort.Slice(active, func(i, j int) bool { return active[i].Path < active[j].Path })
@@ -232,7 +285,7 @@ func (t *liveTracker) snapshot() map[string]any {
 	}
 	return map[string]any{
 		"speedMBps": t.speedWin.mbps(),
-		"session":   map[string]any{"bytes": bytes, "files": files},
+		"session":   map[string]any{"bytes": bytes_, "files": files},
 		"active":    active,
 		"current":   curOut,
 	}
@@ -361,9 +414,10 @@ func propfindXML(rel string, depth string) string {
 
 func davAuth(w http.ResponseWriter, r *http.Request, c *Config) bool {
 	user, pass, ok := r.BasicAuth()
+	wantUser, wantPass := c.cred() // MED-21：与 /api/cred 的写入互斥
 	if !ok ||
-		subtle.ConstantTimeCompare([]byte(user), []byte(c.User)) != 1 ||
-		subtle.ConstantTimeCompare([]byte(pass), []byte(c.Pass)) != 1 {
+		subtle.ConstantTimeCompare([]byte(user), []byte(wantUser)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(pass), []byte(wantPass)) != 1 {
 		w.Header().Set("WWW-Authenticate", `Basic realm="mibackpc", charset="UTF-8"`)
 		http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
 		return false
@@ -412,10 +466,21 @@ func human(n int64) string {
 	}
 }
 
-// copyReporting 按块拷贝并在每块写入后上报实时统计（PUT 用；io.Copy 拿不到逐块字节）
-func copyReporting(dst io.Writer, src io.Reader, connKey string) (int64, error) {
+// readIdleTimeout PUT 读空闲上限：超过该时长没有新数据即断开（MED-20）
+const readIdleTimeout = 60 * time.Second
+
+// copyReporting 按块拷贝并在每块写入后上报实时统计（PUT 用；io.Copy 拿不到逐块字节）。
+// MED-20：每读到一块就把读超时向后推 —— 慢速滴流客户端（单次间隔小于超时、总时长无限）
+// 会在空闲超过 readIdleTimeout 时被断开，避免长期占住 PUT 协程。
+func copyReporting(dst io.Writer, src io.Reader, connKey string, ctrl *http.ResponseController) (int64, error) {
 	var total int64
 	buf := make([]byte, 256*1024)
+	extend := func() {
+		if ctrl != nil {
+			_ = ctrl.SetReadDeadline(time.Now().Add(readIdleTimeout))
+		}
+	}
+	extend()
 	for {
 		n, rerr := src.Read(buf)
 		if n > 0 {
@@ -424,6 +489,7 @@ func copyReporting(dst io.Writer, src io.Reader, connKey string) (int64, error) 
 			}
 			total += int64(n)
 			live.feedPUT(connKey, n)
+			extend()
 		}
 		if rerr == io.EOF {
 			return total, nil
@@ -502,6 +568,15 @@ func davHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 			http.Error(w, "409 Conflict", http.StatusConflict)
 			return
 		}
+		// MED-20：写前预检可用空间，避免客户端（含被攻陷/异常的手机端）把磁盘写满，
+		// 连累本机其它进程。仅在有 Content-Length 时判定，未知长度仍放行（逐块写入时由磁盘自身兜底）。
+		if r.ContentLength > 0 {
+			if free, ferr := freeSpaceAt(filepath.Dir(local)); ferr == nil && uint64(r.ContentLength) > free {
+				logf("PUT  REJECT %s 空间不足 need=%d bytes free=%d bytes", rel, r.ContentLength, free)
+				http.Error(w, "507 Insufficient Storage", http.StatusInsufficientStorage)
+				return
+			}
+		}
 		// 临时文件 + rename：断连/中途失败不落半截文件（分片重试才不会把坏分片当有效数据）
 		tmp := local + ".mibackpart"
 		f, err := os.Create(tmp)
@@ -512,7 +587,7 @@ func davHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 		// 逐块写入并上报实时统计（/api/live：速度 + 当前文件进度）
 		connKey := r.RemoteAddr
 		live.registerPUT(connKey, rel, r.ContentLength)
-		n, copyErr := copyReporting(f, r.Body, connKey)
+		n, copyErr := copyReporting(f, r.Body, connKey, http.NewResponseController(w))
 		closeErr := f.Close()
 		if copyErr == nil {
 			copyErr = closeErr
@@ -953,6 +1028,39 @@ func pairView(req *pairReq) map[string]any {
 	}
 }
 
+// pairThrottle 同一 IP 的配对请求节流（MED-22）：
+// /pair/requests 无鉴权，未认证的局域网用户可以反复请求触发本机 SystemModal 弹窗。
+var pairThrottle struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+// pairThrottleInterval 同一 IP 的最小请求间隔。
+// 取 5s：弹窗是 SystemModal 置顶窗，被刷会直接让电脑不可用；
+// 手机端配对只在用户点「连接」时发一次请求，5s 窗口不影响正常重试。
+const pairThrottleInterval = 5 * time.Second
+
+func pairThrottleAllow(ip string) bool {
+	pairThrottle.mu.Lock()
+	defer pairThrottle.mu.Unlock()
+	if pairThrottle.last == nil {
+		pairThrottle.last = map[string]time.Time{}
+	}
+	now := time.Now()
+	if last, ok := pairThrottle.last[ip]; ok && now.Sub(last) < pairThrottleInterval {
+		return false
+	}
+	pairThrottle.last[ip] = now
+	if len(pairThrottle.last) > 256 {
+		for k, v := range pairThrottle.last {
+			if now.Sub(v) > time.Minute {
+				delete(pairThrottle.last, k)
+			}
+		}
+	}
+	return true
+}
+
 // pairHandler 面向局域网手机：POST /pair/requests 发起请求，GET …/result 轮询结果。
 // 结果仅下发给发起请求的同一 IP，凭据取走即焚。
 func pairHandler(w http.ResponseWriter, r *http.Request, c *Config) {
@@ -982,7 +1090,19 @@ func pairHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 			Created: time.Now(),
 			Status:  "pending",
 		}
+		// MED-22：/pair/requests 无鉴权，未认证的局域网用户可反复 POST 制造弹窗风暴，
+		// 并覆盖单槽 pairStore.current 把合法配对挤掉。这里两道闸：
+		// 1) 同 IP 节流；2) 已有未决请求时直接拒绝（不新建、不弹窗、不顶替）。
+		if !pairThrottleAllow(callerIP) {
+			http.Error(w, "too many pairing requests", http.StatusTooManyRequests)
+			return
+		}
 		pairStore.mu.Lock()
+		if cur := pairStore.current; cur != nil && cur.Status == "pending" && time.Since(cur.Created) < pairTTL {
+			pairStore.mu.Unlock()
+			http.Error(w, "a pairing request is already pending", http.StatusTooManyRequests)
+			return
+		}
 		pairStore.current = pending
 		pairStore.mu.Unlock()
 		logf("收到手机「%s」连接请求（%s）", pending.Device, callerIP)
@@ -1006,11 +1126,12 @@ func pairHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 		case req.Status == "pending":
 			resp = map[string]any{"status": "pending"}
 		case req.Status == "approved":
+			user, pass := c.cred()
 			resp = map[string]any{
 				"status": "approved",
 				"name":   hostName(),
-				"user":   c.User,
-				"pass":   c.Pass,
+				"user":   user,
+				"pass":   pass,
 				"port":   c.Port,
 			}
 			pairStore.current = nil // 凭据取走即焚
@@ -1123,10 +1244,54 @@ func isLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func controlHandler(w http.ResponseWriter, r *http.Request, c *Config) {
-	// 控制面只允许本机：局域网设备只应访问 /dav/*
+// controlHeader 控制面自定义请求头（HIGH-08）：
+// 自定义头会让浏览器先发 CORS 预检，而本服务不返回任何 Access-Control-Allow-* 头，
+// 跨站页面因此无法构造带该头的请求 —— 作为 CSRF token 使用（值本身无需保密）。
+const controlHeader = "X-Mibackpc"
+
+// controlHostAllowed 校验 Host 头是否为本机回环形式，防 DNS 重绑定：
+// 攻击者页面把域名解析到 127.0.0.1 后，RemoteAddr 是回环、浏览器视作同源可直接读响应，
+// 但 Host 头仍是被攻击的域名 —— 据此拒绝（否则 /api/state 会泄露 WebDAV 密码）。
+func controlHostAllowed(r *http.Request) bool {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// controlGuard 控制面统一守卫：回环来源 + 回环 Host + 写操作必须带自定义头 + 拒绝跨站
+func controlGuard(w http.ResponseWriter, r *http.Request) bool {
 	if !isLoopback(r) {
 		http.Error(w, "control interface is local-only", http.StatusForbidden)
+		return false
+	}
+	if !controlHostAllowed(r) {
+		logf("控制面拒绝非回环 Host 请求：%s（疑似 DNS 重绑定）", r.Host)
+		http.Error(w, "control interface requires loopback Host", http.StatusForbidden)
+		return false
+	}
+	// 改配置/批准配对的端点必须是「非简单请求」：text/plain + JSON body 属简单请求，
+	// 可免预检直接命中，恶意网页因此能静默改备份目录、重置凭据、批准配对
+	if r.Method != http.MethodGet && r.Header.Get(controlHeader) == "" {
+		http.Error(w, "missing "+controlHeader+" header", http.StatusForbidden)
+		return false
+	}
+	if strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") {
+		http.Error(w, "cross-site request rejected", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func controlHandler(w http.ResponseWriter, r *http.Request, c *Config) {
+	// 控制面只允许本机：局域网设备只应访问 /dav/*
+	if !controlGuard(w, r) {
 		return
 	}
 
@@ -1137,19 +1302,20 @@ func controlHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 		pairStore.mu.Unlock()
 		adb := adbGet()
 		dReady, dLast, dPeer, dProbes, dRebuilds, dErr := discoveryInfo()
+		user, pass := c.cred()
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"root":             davRoot(),
 			"port":             c.Port,
-			"user":             c.User,
-			"pass":             c.Pass,
+			"user":             user,
+			"pass":             pass,
 			"lanIPs":           lanIPs(),
 			"adbURL":           fmt.Sprintf("http://127.0.0.1:%d/dav/", c.Port),
 			"adbOK":            adb.OK,
 			"adbReason":        adbReasonText(adb),
 			"name":             hostName(),
 			"pairPending":      pending,
-			"pairedDevices":    c.Pair,
+			"pairedDevices":    c.pairedDevices(),
 			"discoverPort":     discoverPort,
 			"discoverReady":    dReady,
 			"discoverStat":     discoveryStatText(dReady, dLast, dPeer, dProbes),
@@ -1194,8 +1360,7 @@ func controlHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 		davFS.mu.Lock()
 		davFS.root = abs
 		davFS.mu.Unlock()
-		c.Root = abs
-		c.save()
+		c.setRoot(abs)
 		logf("备份目录设置为 %s", abs)
 		w.WriteHeader(http.StatusNoContent)
 
@@ -1210,8 +1375,7 @@ func controlHandler(w http.ResponseWriter, r *http.Request, c *Config) {
 			http.Error(w, "user 不能为空，pass 至少 4 位", http.StatusBadRequest)
 			return
 		}
-		c.User, c.Pass = req.User, req.Pass
-		c.save()
+		c.setCred(req.User, req.Pass)
 		logf("WebDAV 账号已更新为 %s", req.User)
 		w.WriteHeader(http.StatusNoContent)
 
@@ -1324,7 +1488,7 @@ func adbProbe(port int) adbSnapshot {
 		s.Reason = r
 		return s
 	}
-	s.Reason = "USB 通道未建立"
+	s.Reason = adbNotEstablished
 	return s
 }
 
@@ -1356,16 +1520,28 @@ func firstLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// adbNotEstablished 「adb 可用 + 设备在线，但 reverse 通道未建立」这一探测结论的标记。
+// startAdbMonitor 只在这种情况下主动建通道：没有设备时反复 spawn adb 没有意义。
+const adbNotEstablished = "USB 通道未建立"
+
 // startAdbMonitor USB 通道后台轮询：15s ~ 60s 指数退避（成功即复位），状态变化才记日志。
 // 控制页的 1.2s 轮询因此不再触发任何 adb 子进程。
 //
 // 退避上限刻意取 60s 而非更长：退避过长会让「无设备 → 插上手机并 adb reverse 后」
 // 的控制页状态长时间停留在旧的「未建立」，用户会以为没生效。
+//
+// 「设备在线但通道未建立」时主动执行 adb reverse：手机侧只有 127.0.0.1:port 有应答
+// 才算 USB 通道可用，而 USB 通道优先于局域网（手机侧 PcDiscovery/BackupFragment 据此选路）。
+// 原实现只在控制页点「重连」时才建，用户插上线不动控制页，手机侧永远发现不了 USB 条目，
+// 只能一直走局域网。
 func startAdbMonitor(port int) {
 	go func() {
 		backoff := adbProbeMinInterval
 		for {
 			s := adbProbe(port)
+			if !s.OK && s.Reason == adbNotEstablished {
+				s = adbReverse(port)
+			}
 			prev := adbGet()
 			if !prev.Checked.IsZero() && (prev.OK != s.OK || prev.Reason != s.Reason) {
 				logf("USB 通道状态变化：%s", s.Reason)
@@ -1381,7 +1557,18 @@ func startAdbMonitor(port int) {
 	}()
 }
 
-// adbForce 控制页「重连」按钮：真正执行 adb reverse 建立通道（同步，5s 硬上限）
+// adbReverse 执行 adb reverse 建立/刷新 USB 通道（同步，5s 硬上限），返回建立后的探测快照。
+//
+// 刻意不在这里写缓存：调用方 startAdbMonitor 会先取上一份快照做比对，再统一写入；
+// 若此处提前 adbPut，「未建立 → 已建立」这次跳变会被自己抹掉，
+// 状态变化日志（含"设备掉线后重连成功"）就永远不会出现。
+func adbReverse(port int) adbSnapshot {
+	local := fmt.Sprintf("tcp:%d", port)
+	_, _ = adbRun(5*time.Second, "reverse", local, local)
+	return adbProbe(port)
+}
+
+// adbForce 控制页「重连」按钮：建立通道并记录结果（同步，5s 硬上限）
 func adbForce(port int) bool {
 	local := fmt.Sprintf("tcp:%d", port)
 	out, rerr := adbRun(5*time.Second, "reverse", local, local)
@@ -1562,6 +1749,9 @@ const indexHTML = `<!DOCTYPE html>
 <div id="toast"></div>
 <script>
 const esc = s => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");
+// 控制面写操作必须带自定义头：浏览器会先发 CORS 预检，而本服务不返回 ACAO 头，
+// 跨站页面因此无法构造（防 CSRF，HIGH-08）
+const APIH = {"X-Mibackpc":"1"};
 let lastPair = "";
 function toast(m){ const t=document.getElementById("toast"); t.textContent=m; t.classList.add("show");
   clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2200); }
@@ -1630,13 +1820,13 @@ async function pollLive(){
   } catch(e){}
 }
 async function decide(ok){
-  await fetch("/api/pair/decide",{method:"POST",body:JSON.stringify({approve:ok})});
+  await fetch("/api/pair/decide",{method:"POST",headers:APIH,body:JSON.stringify({approve:ok})});
   toast(ok ? "已允许连接" : "已拒绝连接");
   refresh();
 }
-async function setRoot(){ const r = await fetch("/api/root",{method:"POST",body:JSON.stringify({root:document.getElementById("root").value})}); if(!r.ok) toast(await r.text()); else toast("已保存"); refresh(); }
-async function setCred(){ const r = await fetch("/api/cred",{method:"POST",body:JSON.stringify({user:document.getElementById("user").value,pass:document.getElementById("pass").value})}); if(!r.ok) toast(await r.text()); else toast("已更新"); refresh(); }
-async function doAdb(){ await fetch("/api/adb",{method:"POST"}); refresh(); }
+async function setRoot(){ const r = await fetch("/api/root",{method:"POST",headers:APIH,body:JSON.stringify({root:document.getElementById("root").value})}); if(!r.ok) toast(await r.text()); else toast("已保存"); refresh(); }
+async function setCred(){ const r = await fetch("/api/cred",{method:"POST",headers:APIH,body:JSON.stringify({user:document.getElementById("user").value,pass:document.getElementById("pass").value})}); if(!r.ok) toast(await r.text()); else toast("已更新"); refresh(); }
+async function doAdb(){ await fetch("/api/adb",{method:"POST",headers:APIH}); refresh(); }
 refresh(); poll(); pollLive();
 setInterval(refresh,1200); setInterval(poll,2000); setInterval(pollLive,1500);
 </script></body></html>`
@@ -1715,7 +1905,16 @@ func main() {
 	}
 	// 监听带重试：端口被上一实例占用时不再直接 os.Exit(1)（现场出现过
 	// ":8321 Only one usage of each socket address" 秒退）
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 15 * time.Second}
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 15 * time.Second,
+		// MED-20：补齐空闲连接与请求头上限。刻意不设 ReadTimeout —— 它约束的是
+		// 「读完整请求（含 body）」的总时长，大文件备份会被误杀；
+		// 慢客户端改由 copyReporting 的读空闲超时约束。
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
 	var lastErr error
 	for attempt := 1; attempt <= httpBindAttempts; attempt++ {
 		lastErr = srv.ListenAndServe()

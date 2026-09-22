@@ -17,11 +17,14 @@ import java.util.List;
 /**
  * 局域网 / USB 自动发现电脑端 mibackpc。
  *
- * 三路并发探测，任一路命中即报告（去重后合并）：
+ * 三路并发探测，任一路命中即报告（去重后合并，USB 条目稳定排在前面，见 usbFirst）：
  *  1. 局域网：UDP 广播探测码到 8322，mibackpc 单播回 JSON（手机只发广播 + 收单播，
  *     不需要组播锁等特殊权限）
  *  2. USB：adb reverse 建立后手机访问 127.0.0.1:8321/miback/info
  *  3. 上次连接过的地址：覆盖路由器重启后 IP 漂移、UDP 被路由器/AP 隔离吞掉的场景
+ *
+ * 传输优先级：USB（adb reverse 直连）> 局域网。USB 通道不经过路由器、不受 AP 隔离与
+ * Android 本地网络保护影响，也不与 Wi-Fi 争同频空口，有线通道在场时优先使用。
  */
 public final class PcDiscovery {
 
@@ -51,6 +54,11 @@ public final class PcDiscovery {
             return "http://" + host + ":" + port + "/dav/";
         }
 
+        /** host:port 形式的地址标识（与 config.ini 里 pc_paired_addr 的落盘格式一致） */
+        public String addr() {
+            return host + ":" + port;
+        }
+
         public boolean sameAs(PcInfo o) {
             return o != null && host.equals(o.host) && port == o.port;
         }
@@ -69,11 +77,27 @@ public final class PcDiscovery {
     private PcDiscovery() {
     }
 
+    /** 无历史记录时探测的常见主机位：网关 .1 + .2~.10 + .100~.110（MED-16） */
+    private static final int[] PROBE_LAST_OCTETS = buildProbeLastOctets();
+
+    private static int[] buildProbeLastOctets() {
+        var list = new java.util.ArrayList<Integer>();
+        list.add(1);
+        for (var i = 2; i <= 10; i++) list.add(i);
+        for (var i = 100; i <= 110; i++) list.add(i);
+        var arr = new int[list.size()];
+        for (var i = 0; i < arr.length; i++) arr[i] = list.get(i);
+        return arr;
+    }
+
     /**
      * 同步扫描（约 1.5~2.5s，必须在后台线程调用）。永不抛异常，失败返回空列表。
      */
     public static List<PcInfo> scan() {
-        List<PcInfo> out = new ArrayList<>();
+        // MED-15：out 会被主线程（probeHttp 串行探测）与 UDP 线程（udpScan→addIfNew）并发写。
+        // 裸 ArrayList 的 contains+add 既非线程安全（丢元素/IndexOutOfBounds）也非原子（重复条目）。
+        // 用同步包装 + 显式锁保证「查重 + 添加」的原子性。
+        List<PcInfo> out = java.util.Collections.synchronizedList(new ArrayList<>());
         long deadline = SystemClock.elapsedRealtime() + 2500;
         Thread udp = new Thread(() -> udpScan(out, 1500), "pc-scan-udp");
         udp.setDaemon(true);
@@ -116,7 +140,48 @@ public final class PcDiscovery {
             udp.join(Math.max(500, deadline - SystemClock.elapsedRealtime()));
         } catch (InterruptedException ignored) {
         }
-        return out;
+        // 传输优先级归一化（USB 优先），理由见 usbFirst 注释
+        return usbFirst(out);
+    }
+
+    /**
+     * 传输优先级归一化：USB（adb reverse 直连）条目稳定排在局域网条目之前。
+     *
+     * 三路探测是并发的（UDP 线程与调用线程同时 addIfNew），返回列表的顺序本来不确定。
+     * 未配对时 BackupFragment 取「第一条未被忽略的」弹连接询问、并按它落盘 pc_paired_addr，
+     * 顺序不确定就可能选中局域网条目 → 通道固化为局域网，此后即使 USB 在场也走局域网。
+     * USB 通道是 127.0.0.1 直连、不经路由器、不受 AP 隔离/本地网络保护影响，
+     * 也不与 Wi-Fi 争同频空口，有线通道在场时必须排在前面。
+     */
+    public static List<PcInfo> usbFirst(List<PcInfo> found) {
+        if (found == null || found.isEmpty()) return found;
+        var usb = new ArrayList<PcInfo>();
+        var lan = new ArrayList<PcInfo>();
+        for (var p : found) {
+            if (p == null) continue;
+            (p.usb ? usb : lan).add(p);
+        }
+        if (usb.isEmpty()) return found; // 无 USB：保持原顺序（上次地址 + 局域网候选）
+        usb.addAll(lan);
+        return usb;
+    }
+
+    /** 本次扫描结果里的 USB（adb reverse）条目；无则 null */
+    public static PcInfo firstUsb(List<PcInfo> found) {
+        if (found == null) return null;
+        for (var p : found) {
+            if (p != null && p.usb) return p;
+        }
+        return null;
+    }
+
+    /** 按 host:port 命中本次扫描结果（addr 为 pc_paired_addr 的落盘格式）；无则 null */
+    public static PcInfo byAddr(List<PcInfo> found, String addr) {
+        if (found == null || addr == null || addr.isEmpty()) return null;
+        for (var p : found) {
+            if (p != null && addr.equals(p.addr())) return p;
+        }
+        return null;
     }
 
     /** UDP 广播探测：发探测码到全局广播 + 各网卡定向广播 + 已知地址单播，收 1.5s 单播应答 */
@@ -162,11 +227,13 @@ public final class PcDiscovery {
                 }
             }
             // 2) 手机所在子网的网关（.1）和常见 PC 段（.2~.10, .100~.110）：覆盖首次无历史的场景
+            //    MED-16：注释与实现曾不一致——数组只有 {1,2,3,4,5,100,101,102}，
+            //    无历史记录时漏扫 .6~.10 与 .103~.110，现按注释意图生成完整候选
             for (var ni : java.util.Collections.list(NetworkInterface.getNetworkInterfaces())) {
                 for (var a : java.util.Collections.list(ni.getInetAddresses())) {
                     if (!(a instanceof java.net.Inet4Address) || a.isLoopbackAddress()) continue;
                     var b = a.getAddress();
-                    for (int last : new int[]{1, 2, 3, 4, 5, 100, 101, 102}) {
+                    for (int last : PROBE_LAST_OCTETS) {
                         try {
                             var ip = InetAddress.getByAddress(new byte[]{b[0], b[1], b[2], (byte) last});
                             if (seen.add(ip)) targets.add(ip);
@@ -323,6 +390,10 @@ public final class PcDiscovery {
     }
 
     private static void addIfNew(List<PcInfo> out, PcInfo info) {
-        if (!out.contains(info)) out.add(info);
+        if (info == null) return;
+        // MED-15：contains + add 必须原子，否则并发下会产生重复条目
+        synchronized (out) {
+            if (!out.contains(info)) out.add(info);
+        }
     }
 }

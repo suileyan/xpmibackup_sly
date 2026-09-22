@@ -231,6 +231,19 @@ public class AIDLHook {
     }
 
     /**
+     * DFS AIDL one-way 事务码（NEW：原为裸魔数 1/6/7/9/16/22）。
+     * 这些是 com.xiaomi.dist.file.client.common.IDistFileClientKit 的一向事务编号，
+     * 只做「已知安全事务直接短路」的用途；名字按语义标注，具体方法名随小米版本混淆，
+     * 因此以 code 为准、注释说明含义。
+     */
+    private static final int TRANSACT_START = 1;
+    private static final int TRANSACT_CANCEL = 6;
+    private static final int TRANSACT_REGISTER_LISTENER = 7;
+    private static final int TRANSACT_UNREGISTER_LISTENER = 9;
+    private static final int TRANSACT_SET_CALLBACK = 16;
+    private static final int TRANSACT_HEARTBEAT = 22;
+
+    /**
      * 兜底短路部分SDK直接发出的one-way Binder调用，避免真实DFS服务缺失导致异常
      */
     private void hookBinderProxyTransact() {
@@ -256,12 +269,12 @@ public class AIDLHook {
                         }
                         if (AIDLHook.DESCRIPTOR.equals(descriptor)) {
                             switch (code) {
-                                case 1:
-                                case 6:
-                                case 7:
-                                case 9:
-                                case 16:
-                                case 22:
+                                case TRANSACT_START:
+                                case TRANSACT_CANCEL:
+                                case TRANSACT_REGISTER_LISTENER:
+                                case TRANSACT_UNREGISTER_LISTENER:
+                                case TRANSACT_SET_CALLBACK:
+                                case TRANSACT_HEARTBEAT:
                                     param.setResult(true);
                                     break;
                                 default:
@@ -320,7 +333,16 @@ public class AIDLHook {
                 } else if (args.length == 1 && "equals".equals(name)) {
                     return proxy == args[0];
                 }
-                return AIDLHook.this.handleAidlMethod(method, args, lpparam);
+                var result = AIDLHook.this.handleAidlMethod(method, args, lpparam);
+                // CRIT-04：动态代理返回 null 时，AIDL stub 对原语返回值会做拆箱（如 Boolean→boolean），
+                // 直接抛 NPE 打穿宿主进程，且 catch(Exception) 拦不住反射链路外的拆箱。
+                // 未识别的方法一律补类型零值，保证宿主不会因为我们的兜底路径崩溃。
+                var returnType = method.getReturnType();
+                if (result == null && returnType.isPrimitive() && returnType != Void.TYPE) {
+                    LogHelp.w(TAG, "AIDLCall: " + name + " 未识别，按原语零值返回（" + returnType.getSimpleName() + "）");
+                    return defaultValueOf(returnType);
+                }
+                return result;
             }
         });
         var attachMethod = android.os.Binder.class.getDeclaredMethod("attachInterface", IInterface.class, String.class);
@@ -328,6 +350,21 @@ public class AIDLHook {
         attachMethod.invoke(binderInstance, ifaceProxy, DESCRIPTOR);
         mockBinder = binderInstance;
         return binderInstance;
+    }
+
+    /**
+     * 原语返回类型的零值（CRIT-04）。void 已在调用处排除。
+     */
+    private static Object defaultValueOf(Class<?> type) {
+        if (type == Boolean.TYPE) return Boolean.FALSE;
+        if (type == Byte.TYPE) return (byte) 0;
+        if (type == Character.TYPE) return (char) 0;
+        if (type == Short.TYPE) return (short) 0;
+        if (type == Integer.TYPE) return 0;
+        if (type == Long.TYPE) return 0L;
+        if (type == Float.TYPE) return 0f;
+        if (type == Double.TYPE) return 0d;
+        return null;
     }
 
     /**
@@ -571,6 +608,9 @@ public class AIDLHook {
         if (pfd == null) {
             return;
         }
+        // 记录"宿主发起本次上传"的时刻：取消判定必须以请求时刻为准，
+        // 用线程池真正开跑的时刻会让排队中的上传在取消后照样执行
+        final var requestAt = android.os.SystemClock.elapsedRealtime();
         try {
             getUploadExecutor().execute(new Runnable() {
                 /**
@@ -578,7 +618,7 @@ public class AIDLHook {
                  */
                 @Override
                 public final void run() {
-                    AIDLHook.this.runMockUpload(pfd, aidlPath, listener, taskId, lpparam);
+                    AIDLHook.this.runMockUpload(pfd, aidlPath, listener, taskId, lpparam, requestAt);
                 }
             });
         } catch (RejectedExecutionException e) {
@@ -592,10 +632,17 @@ public class AIDLHook {
     /**
      * 执行上传并保证文件描述符最终关闭
      */
-    private void runMockUpload(ParcelFileDescriptor pfd, String aidlPath, Object listener, String taskId, XC_LoadPackage.LoadPackageParam lpparam) {
+    private void runMockUpload(ParcelFileDescriptor pfd, String aidlPath, Object listener, String taskId,
+                               XC_LoadPackage.LoadPackageParam lpparam, long requestAt) {
+        // 排队期间备份已被取消：整个请求直接丢弃（否则会白复制几 GB 临时文件再白传）
+        if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+            LogHelp.i(TAG, "upload request dropped (backup cancelled): " + aidlPath);
+            closeQuietly(pfd);
+            return;
+        }
         try {
             keepDfsConnected(lpparam);
-            uploadViaFd(pfd, aidlPath, listener, taskId);
+            uploadViaFd(pfd, aidlPath, listener, taskId, requestAt);
             keepDfsConnected(lpparam);
         } catch (Exception e) {
             logError("mock upload failed", e);
@@ -968,6 +1015,15 @@ public class AIDLHook {
 
     /**
      * 使用Parcel构造小米SDK里的SmbFile对象
+     *
+     * 字段序必须与 com.xiaomi.dist.file.client.common.model.SmbFile#writeToParcel 完全一致
+     * （见 decompiled_xpbackup/.../common/model/SmbFile.java）：
+     *   writeString(path) / writeLong(fileSize) / writeLong(createTime) / writeLong(lastWriteTime)
+     *   / writeString(mimeType) / writeString(title) / writeString(displayName)
+     *   / writeInt(width) / writeInt(height) / writeInt(attributes) / writeLong(lastAccessTime)
+     *   / writeParcelable(FileExtraAttributes)
+     * 其中 path 与 displayName 在读取侧有 Objects.requireNonNull，传 null 会直接崩宿主。
+     * 漂移检测见 {@link #verifyParcelConsumed}（CRIT-05）。
      */
     private Parcelable createSmbFile(RemoteEntry entry, String aidlDir, XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
         var clazz = dfsModelClass(lpparam, "SmbFile");
@@ -988,15 +1044,39 @@ public class AIDLHook {
             parcel.writeInt(directory ? 16 : 128);
             parcel.writeLong(modified);
             parcel.writeParcelable(null, 0);
+            var written = parcel.dataSize();
             parcel.setDataPosition(0);
-            return createFromParcel(clazz, parcel);
+            var obj = createFromParcel(clazz, parcel);
+            verifyParcelConsumed(parcel, written, "SmbFile");
+            return obj;
         } finally {
             parcel.recycle();
         }
     }
 
     /**
+     * Parcel 字段序漂移检测（CRIT-05）：
+     * createXxx 系列按小米 SDK 模型字段序手工 write，字段数/类型随版本漂移时
+     * - 类型不匹配 → createFromParcel 抛异常（调用方 catch 后记录）；
+     * - 类型兼容但错位 → 静默产生错误数据（恢复列表内容错乱），此前没有任何校验兜底。
+     * 这里核对「CREATOR 是否恰好读完我们写入的全部字节」，不一致即告警，供版本矩阵定位漂移。
+     * 只告警不改变行为——避免误判导致功能直接不可用。
+     */
+    private static void verifyParcelConsumed(Parcel parcel, int written, String model) {
+        try {
+            var pos = parcel.dataPosition();
+            if (pos != written) {
+                LogHelp.e(TAG, "AIDL model drift: " + model + " parcel consumed=" + pos + " written=" + written
+                        + "（小米 SDK 字段序可能已变化，请收集上报）");
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
      * 构造模拟设备信息，保持设备ID和页面入口传参一致
+     * 字段序对齐 DeviceInfo#writeToParcel：writeString(id) / writeString(name)
+     * / writeInt / writeInt / writeInt
      */
     private Parcelable createDeviceInfo(XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
         var clazz = dfsModelClass(lpparam, "DeviceInfo");
@@ -1007,8 +1087,11 @@ public class AIDLHook {
             parcel.writeInt(1);
             parcel.writeInt(128);
             parcel.writeInt(1);
+            var written = parcel.dataSize();
             parcel.setDataPosition(0);
-            return createFromParcel(clazz, parcel);
+            var obj = createFromParcel(clazz, parcel);
+            verifyParcelConsumed(parcel, written, "DeviceInfo");
+            return obj;
         } finally {
             parcel.recycle();
         }
@@ -1016,6 +1099,8 @@ public class AIDLHook {
 
     /**
      * 构造共享路径信息，供备份页面展示远端空间
+     * 字段序对齐 PathInfo#writeToParcel：writeInt / writeString(name) / writeString(path)
+     * / writeLong / writeLong / writeByte / writeTypedList / writeBundle
      */
     private static Parcelable createPathInfo(XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
         var clazz = dfsModelClass(lpparam, "PathInfo");
@@ -1029,8 +1114,11 @@ public class AIDLHook {
             parcel.writeByte((byte) 1);
             parcel.writeTypedList(new ArrayList<Parcelable>());
             parcel.writeBundle(new Bundle());
+            var written = parcel.dataSize();
             parcel.setDataPosition(0);
-            return createFromParcel(clazz, parcel);
+            var obj = createFromParcel(clazz, parcel);
+            verifyParcelConsumed(parcel, written, "PathInfo");
+            return obj;
         } finally {
             parcel.recycle();
         }
@@ -1047,32 +1135,28 @@ public class AIDLHook {
 
     /**
      * 从ParcelFileDescriptor读取备份文件并上传到当前云端备份协议
+     *
+     * @param requestAt 宿主发起本次上传请求的时刻（取消判定基准，见 {@link com.suileyan.comm.BackupCancel}）
      */
-    private void uploadViaFd(ParcelFileDescriptor pfd, String aidlPath, Object listener, String taskId) throws Exception {
+    private void uploadViaFd(ParcelFileDescriptor pfd, String aidlPath, Object listener, String taskId,
+                             long requestAt) throws Exception {
+        if (com.suileyan.comm.BackupCancel.isCancelledFor(requestAt)) {
+            LogHelp.i(TAG, "uploadViaFd skipped (backup cancelled): " + aidlPath);
+            return;
+        }
         var remotePath = normalizeRemotePath(aidlPath);
         var remoteDir = extractRemoteDir(remotePath);
         var fileName = extractFileName(remotePath);
+        // 上传源**不做整份复制**：分片上传本身就是"边切边传、每片传完即删"，
+        // 再复制一份完整副本会让手机端峰值占用凭空多出一整个文件（8.75GB 的微信项实测就是这个量级）。
+        // 源文件在上传期间被宿主删除的风险由「fd 打开后 unlink 仍可读」兜底：
+        // CloudFileHelp 持有 FileInputStream 直到切分结束，分片也写在模块自己的目录里。
         var localFile = LocalBackupFileHelp.resolveUploadFile(pfd, aidlPath);
         var sourceFile = localFile; // 宿主写好的原始备份文件；auto_delete_local 成功后删除此文件
-        var copiedTempFile = (java.io.File) null;
-        if (localFile != null && localFile.exists()) {
-            // 复制到独立临时副本再上传：备份流程可能在上传期间删除源文件
-            // （夸克需先算 md5/sha1 + 分片，窗口长，源文件 ENOENT 频发）。复制失败则回退原文件
-            var safeCopy = LocalBackupFileHelp.createUploadTempFile(aidlPath, fileName);
-            try {
-                safeCopy.getParentFile().mkdirs();
-                try (var is = new FileInputStream(localFile); var os = new FileOutputStream(safeCopy)) {
-                    copyStream(is, os);
-                }
-                localFile = safeCopy;
-                copiedTempFile = safeCopy;
-            } catch (Exception e) {
-                LogHelp.w(TAG, "copy upload source failed, fallback to original: " + localFile.getAbsolutePath(), e);
-            }
-        } else {
-            localFile = null;
-            copiedTempFile = LocalBackupFileHelp.createUploadTempFile(aidlPath, fileName);
-        }
+        // 极少数情况（aidlPath 与 fd 反查都拿不到 AllBackupTemp 下的真实文件）才需要落盘兜底
+        var copiedTempFile = localFile == null
+                ? LocalBackupFileHelp.createUploadTempFile(aidlPath, fileName)
+                : null;
         try {
             BackupHook.recordActiveBackupDir(remoteDir);
             notifyProgressStart(listener, taskId);
@@ -1083,7 +1167,27 @@ public class AIDLHook {
                 }
                 localFile = copiedTempFile;
             }
-            CloudFileHelp.uploadWithProgress(localFile.getAbsolutePath(), listener, remoteDir, taskId);
+            // 进度口径：宿主用「该项 totalSize」当分母算百分比（30 + 70×已传/分母），
+            // 而该分母常与本次实际要传的字节数差几个数量级 → 先把真实分母登记给进度回调，
+            // 由它按分母折算上报，界面才能一项一项从 30% 走到 100%。
+            var hostClassLoader = listener != null ? listener.getClass().getClassLoader() : null;
+            var scale = BackupHook.nasProgressScale(hostClassLoader, taskId);
+            if (scale != null) {
+                com.suileyan.cloud.ListenerProgressCallback.registerProgressScale(taskId, scale[0], scale[1] != 0);
+            }
+            LogHelp.i(TAG, "upload call: taskId=" + taskId + " path=" + remotePath
+                    + " size=" + localFile.length()
+                    + " hostDenom=" + (scale != null ? scale[0] + (scale[1] != 0 ? "(special)" : "") : "n/a")
+                    + " listener=" + (listener == null ? "null" : listener.getClass().getName())
+                    + " item=" + BackupHook.describeNasTaskItem(hostClassLoader, taskId));
+            // 返回 false = 失败或被取消：绝不能继续走"成功"分支（原实现在这里静默失败，
+            // 导致取消/失败后仍把本地源文件删掉）
+            var uploaded = CloudFileHelp.uploadWithProgress(
+                    localFile.getAbsolutePath(), listener, remoteDir, taskId, requestAt);
+            if (!uploaded) {
+                LogHelp.i(TAG, "upload not completed, keep local source: " + remotePath);
+                return;
+            }
             if (isBackupEndFile(fileName)) {
                 uploadLocalDescriptorIfPresent(localFile.getParentFile(), remoteDir);
                 CloudFileHelp.cleanupOldBackups();
@@ -1644,6 +1748,43 @@ public class AIDLHook {
     }
 
     /**
+     * 进度回调方法解析缓存（NEW：反射在热路径）。
+     * invokeProgress 每次进度回调都要 getMethod（失败还会遍历全部方法），
+     * 而进度回调是热路径（每个分片、每个文件多次）。按「类 + 方法名 + 参数类型」缓存解析结果，
+     * 未找到也缓存（Optional.empty），避免每次回调都做一遍全方法扫描并刷日志。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<Method>> PROGRESS_METHOD_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final int PROGRESS_METHOD_CACHE_MAX = 64;
+
+    /** 解析进度回调方法：优先可读名，失败后按「参数类型完全一致 + void 返回」兜底匹配混淆名 */
+    private static Method resolveProgressMethod(Object obj, String method, Class<?>[] types) {
+        var key = obj.getClass().getName() + "#" + method + java.util.Arrays.toString(types);
+        var cached = PROGRESS_METHOD_CACHE.get(key);
+        if (cached != null) {
+            return cached.orElse(null);
+        }
+        Method found = null;
+        try {
+            found = obj.getClass().getMethod(method, types);
+        } catch (Exception e) {
+            for (var m : obj.getClass().getMethods()) {
+                if (m.getParameterCount() != types.length) continue;
+                if (!m.getReturnType().equals(Void.TYPE)) continue;
+                if (java.util.Arrays.equals(m.getParameterTypes(), types)) {
+                    found = m;
+                    break;
+                }
+            }
+        }
+        if (PROGRESS_METHOD_CACHE.size() >= PROGRESS_METHOD_CACHE_MAX) {
+            PROGRESS_METHOD_CACHE.clear();
+        }
+        PROGRESS_METHOD_CACHE.put(key, java.util.Optional.ofNullable(found));
+        return found;
+    }
+
+    /**
      * 先按可读名调用进度回调，再按签名匹配混淆版本
      */
     private static void invokeProgress(Object obj, String method, Class<?>[] types, Object... args) {
@@ -1651,33 +1792,17 @@ public class AIDLHook {
             return;
         }
         args = ProgressCallbackHelp.sanitizeStringArgs(types, args);
+        var target = resolveProgressMethod(obj, method, types);
+        if (target == null) {
+            // 只在该组合首次出现时告警（结果已缓存），便于发现 AIDL 回调名漂移
+            LogHelp.w(TAG, "invokeProgress: no matching method " + method
+                    + " on " + obj.getClass().getName() + " " + java.util.Arrays.toString(types));
+            return;
+        }
         try {
-            obj.getClass().getMethod(method, types).invoke(obj, args);
+            target.invoke(obj, args);
         } catch (Exception e) {
-            try {
-                for (var m : obj.getClass().getMethods()) {
-                    if (m.getParameterCount() == types.length) {
-                        var match = true;
-                        var i = 0;
-                        while (true) {
-                            if (i >= types.length) {
-                                break;
-                            }
-                            if (!m.getParameterTypes()[i].equals(types[i])) {
-                                match = false;
-                                break;
-                            }
-                            i++;
-                        }
-                        if (match && m.getReturnType().equals(Void.TYPE)) {
-                            m.invoke(obj, args);
-                            return;
-                        }
-                    }
-                }
-            } catch (Exception e2) {
-                logError("invokeProgress fallback failed", e2);
-            }
+            logError("invokeProgress failed: " + method, e);
         }
     }
 

@@ -29,6 +29,8 @@
     <string name="about_check_failed">检查失败，请稍后重试</string>
     <string name="about_open_browser">GitHub 发布页</string>
     <string name="about_download_apk">下载 APK（123 网盘）</string>
+    <string name="update_dialog_title">发现新版本</string>
+    <string name="update_dialog_message">新版本 v%1$s 已发布，是否前往下载？</string>
     <string name="tab_device_config">设备配置</string>
     <string name="tab_service_config">NAS</string>
     <string name="tab_account_config">云盘</string>
@@ -234,7 +236,7 @@
     <string name="root_modules_backup">同时备份 Root 模块（Magisk/KernelSU/APatch，需授予 Root）</string>
     <string name="auto_delete_local">上传完成后自动删除本地备份文件</string>
     <string name="auto_delete_local_hint">节省剩余空间，避免小存储机型备份失败</string>
-    <string name="serial_upload">逐项备份（一项 100% 后再备份下一项）</string>
+    <string name="serial_upload" formatted="false">逐项备份（一项 100% 后再备份下一项）</string>
     <string name="serial_upload_hint">默认多项并行，进度会「各 30% 一起补全」</string>
     <string name="root_modules_packing">正在打包 Root 模块…</string>
     <string name="root_modules_pack_fail">Root 模块打包失败，本次备份将不含模块：</string>

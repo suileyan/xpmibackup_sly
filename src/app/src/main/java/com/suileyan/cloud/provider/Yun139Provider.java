@@ -256,6 +256,7 @@ public class Yun139Provider implements CloudProvider {
             // 秒传命中：无需 PUT 与 complete
             if (rapid) {
                 LogHelp.i(TAG, "139 rapidUpload hit, skip PUT/complete: " + localFile.getName());
+                invalidateItemsCache(); // MED-10：秒传同样产生新条目
                 if (cb != null) cb.onProgress(taskId, fileSize, fileSize);
                 if (cb != null) cb.onFinish(taskId, 0, "success");
                 return;
@@ -279,6 +280,9 @@ public class Yun139Provider implements CloudProvider {
             completeBody.put("contentHashAlgorithm", "SHA256");
             callApi("/hcy/file/complete", completeBody);
 
+            // MED-10：上传成功后必须失效目录条目缓存（TTL 60s）——否则 60s 内的 findEntry
+            // 仍命中旧缓存，刚上传的文件被判「不存在」（建目录/删除路径已失效，上传漏了）
+            invalidateItemsCache();
             if (cb != null) cb.onFinish(taskId, 0, "success");
         } catch (CloudException e) {
             if (cb != null) cb.onFinish(taskId, -1, e.getMessage());

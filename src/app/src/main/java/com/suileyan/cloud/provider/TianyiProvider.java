@@ -471,8 +471,8 @@ public class TianyiProvider implements CloudProvider {
                 throw new CloudException(CloudException.Kind.AUTH_EXPIRED,
                         "189 InvalidSessionKey" + (refreshed ? "（刷新后仍失败）" : ""));
             }
+            // HIGH-10：不再把 sessionKey 前缀写进日志——它是会话凭据，截断不能消除风险
             LogHelp.e(TAG, "189 generateRsaKey HTTP " + resp.code
-                    + " sessionKey=" + truncate(sessionKey, 12)
                     + " body=" + truncate(resp.body, 250));
             throw new CloudException(CloudException.Kind.REMOTE, "189 generateRsaKey HTTP " + resp.code);
         }
@@ -847,7 +847,10 @@ public class TianyiProvider implements CloudProvider {
             for (var i = 0; i < 60; i++) {
                 try {
                     Thread.sleep(500);
-                } catch (InterruptedException ignored) {
+                } catch (InterruptedException ie) {
+                    // MED-09：吞中断会丢失取消信号，重试循环无法提前终止
+                    Thread.currentThread().interrupt();
+                    throw new CloudException(CloudException.Kind.NETWORK, "189 删除任务等待被中断", ie);
                 }
                 var check = new LinkedHashMap<String, String>();
                 check.put("type", "DELETE");

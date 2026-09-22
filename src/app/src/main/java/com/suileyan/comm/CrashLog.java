@@ -77,6 +77,10 @@ public final class CrashLog {
 
     /** 落盘：优先外部私有目录（免 root 即可 adb pull），失败退回内部私有目录 */
     private static void save(String text) {
+        // HIGH-07：崩溃文本必须与 LogHelp 走同一套脱敏后再落盘——
+        // 异常 message 里常带 token/URL 凭据（Authorization、?token=…），
+        // 此前 LogHelp 通道已脱敏、这里却是原文直写，等于开了个后门
+        var safeText = LogHelp.sanitizeSensitive(text);
         var file = new SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(new Date());
         for (var dir : dirs()) {
             if (dir == null) continue;
@@ -84,7 +88,7 @@ public final class CrashLog {
                 if (!dir.exists() && !dir.mkdirs()) continue;
                 var f = new File(dir, PREFIX + file + ".txt");
                 try (var out = new FileOutputStream(f)) {
-                    out.write(text.getBytes(StandardCharsets.UTF_8));
+                    out.write(safeText.getBytes(StandardCharsets.UTF_8));
                     out.flush();
                 }
                 prune(dir);
