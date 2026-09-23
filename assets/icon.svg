@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="512" height="512">
+  <!-- 由 src/app/src/main/res/drawable/ic_launcher.xml 转换（@color/ic_launcher_cloud=#2A2A2A, @color/ic_launcher_arrow=#E8E8E8） -->
+  <path fill="#2A2A2A" d="M35,45 C37,34 46,27 57,27 C66,27 74,33 77,42 C85,44 91,51 91,60 C91,70 83,78 72,78 L36,78 C25,78 17,70 17,60 C17,51 24,44 33,44 C34,44 34,44 35,45 Z M37,55 C35,54 34,54 33,54 C29,54 26,57 26,61 C26,65 29,68 34,68 L74,68 C79,68 82,65 82,60 C82,56 79,53 74,52 L70,52 L69,48 C68,41 63,37 57,37 C50,37 45,42 44,49 L43,55 Z"/>
+  <path fill="#E8E8E8" d="M50,42 L58,42 L58,61 L66,61 L54,73 L42,61 L50,61 Z"/>
+</svg>

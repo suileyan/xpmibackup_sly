@@ -1,16 +1,32 @@
-# MiBackup_sly - 小米云备份助手
+<div align="center">
+  <img src="assets/icon.svg" width="140" alt="MiBackup_sly"/>
+  <h1>MiBackup_sly</h1>
+  <p><b>小米云备份助手</b> · 把小米备份存到你自己的云盘 / NAS / 电脑</p>
+  <p>
+    <img src="https://img.shields.io/github/v/release/suileyan/xpmibackup_sly?label=Release" alt="Release"/>
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/>
+    &nbsp;
+    <img src="https://img.shields.io/badge/Android-11.0%E2%80%9317-blue" alt="Android 11.0–17"/>
+    <img src="https://img.shields.io/badge/LSPosed-supported-green" alt="LSPosed supported"/>
+    &nbsp;
+    <img src="https://img.shields.io/badge/Xposed-Module-green" alt="Xposed Module"/>
+    <img src="https://img.shields.io/badge/Java-17-orange" alt="Java 17"/>
+    &nbsp;
+    <img src="https://img.shields.io/badge/Upstream-XPoser__MiBackup-blue" alt="Upstream: XPoser_MiBackup"/>
+  </p>
+</div>
 
-![Android](https://img.shields.io/badge/Android-11.0%E2%80%9317-blue)
+---
 
-![LSPosed](https://img.shields.io/badge/LSPosed-supported-green)
+## 项目介绍
 
-![XposedModule](https://img.shields.io/badge/XposedModule-green)
+小米手机自带的「小米备份」只能存到小米云或本地。**MiBackup_sly** 是一个 Xposed / LSPosed 模块：通过虚拟小米智能存储设备，把小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、天翼云盘（189）、百度网盘、联通沃盘，实现备份与恢复数据的云端存储——小米备份原本怎么用，现在还怎么用，只是目标变成了你自己的存储。
 
-![Upstream](https://img.shields.io/badge/Upstream-XPoser__MiBackup-blue)
+本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延伸版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储（AES-256-GCM）、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、天翼云盘（189）、百度网盘、联通沃盘内置 Provider、OAuth2/会话自动刷新、备份至 PC 等能力。
 
-本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延申版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储、移动云盘（139）、光鸭云盘、夸克云盘、123云盘、天翼云盘（189）、百度网盘、联通沃盘内置 Provider、OAuth2/会话自动刷新等能力。
-
-通过 Xposed 模块虚拟小米智能存储设备，将小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、123云盘、天翼云盘（189）、百度网盘、联通沃盘，实现备份与恢复数据的云端存储。
+- 源码：https://github.com/suileyan/xpmibackup_sly
+- 下载（签名 APK + 电脑端 mibackpc.exe）：https://github.com/suileyan/xpmibackup_sly/releases
+- 各版本变更见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 原理
 
@@ -20,7 +36,7 @@
 小米备份 App
   -> 查询智能存储设备：返回虚拟设备
   -> 连接 DFS 服务：模拟在线和已连接
-  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭 / 夸克 / 阿里 / 123 / 189 / 百度 / 联通沃盘
+  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭 / 夸克 / 阿里 / 189 / 百度 / 沃盘 / PC
   -> DFS AIDL 下载：从对应云端读取
   -> 进度与完成回调：回传给小米备份原流程
 ```
@@ -32,399 +48,104 @@
 - 在系统设置中注入「云备份助手」配置入口
 - 拦截 DFS 连接，模拟小米智能存储设备在线状态
 - 支持十一种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、123云盘（v0.9.5 起暂停支持）、天翼云盘（189）、百度网盘、联通沃盘
-- 备份至 PC：备份页自动扫描局域网 / USB 发现电脑端 mibackpc（`pc/` 目录），手机弹窗连接 + 电脑端确认配对，免手动填地址；连接成功后备份方式出现「备份至 PC」
+- **备份至 PC**：备份页自动扫描局域网 / USB 发现电脑端 mibackpc（`pc/` 目录），手机弹窗连接 + 电脑端确认配对，免手动填地址；连接成功后备份方式出现「备份至 PC」
 - **USB 通道优先（v1.0.0）**：电脑端在「设备在线但 `adb reverse` 未建立」时自动建通道；手机发现 `127.0.0.1` 应答即把方案切到 USB（仅当电脑名与已配对的一致，避免写到别的机器），拔线自动回落局域网，无需重新配对
-- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/123/189/百度/沃盘）可并存，按需切换备份目标
-- 凭据加密存储：密码、Token、Cookie 经 AES-GCM 加密落盘，按账号隔离
-- 网盘 Token 自动刷新：光鸭 OAuth2 refresh_token 自动轮换；夸克 __puus 会话自动续期，401 自动重试；天翼 refreshToken 自动轮换 + accessToken 过期自愈
+- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/189/百度/沃盘）可并存，按需切换备份目标
+- 凭据加密存储：密码、Token、Cookie 经 AES-256-GCM 加密落盘，按账号隔离；网盘 Token 自动刷新（光鸭 OAuth2、夸克 __puus 续期、阿里/天翼 refresh_token 轮换等）
 - 大文件在 Cloud 层统一切片上传，十一种协议共用同一套切片逻辑
-- **手机端峰值占用可控（v1.0.0）**：切片前取「在途分片额度」（背压），磁盘分片锁死在 `(并发+2) × chunk_size`（默认 ≤640MB，逐项模式 ≤192MB）；不再整份复制源文件；分片落在模块专属目录 `AllBackupTemp/miback/`；进程异常退出留下的孤儿分片会在下次上传时自动清理（6 小时阈值，不误伤在途分片）
+- **手机端峰值占用可控（v1.0.0）**：切片前取「在途分片额度」（背压），磁盘分片锁死在 `(并发+2) × chunk_size`（默认 ≤640MB，逐项模式 ≤192MB）；不再整份复制源文件；孤儿分片自动清理（6 小时阈值，不误伤在途分片）
 - **实时上传速率（v1.0.0）**：备份页总进度条右侧显示每秒刷新的速率角标
 - **取消即停（v1.0.0）**：备份页取消后 1~2 秒内停止上传（最多再传完当前一片），且失败/取消一律不删本地源文件
 - **进度口径修正（v1.0.0）**：按宿主自己的分母折算上报，备份项进度不再是「贴住 30% 然后直接跳 100%」
-- 自动清理超出数量限制的旧备份
+- 自动清理超出数量限制的旧备份；备份页支持「自动删除本地已上传文件」「逐项串行备份」开关
 - Android 11~17 适配：edge-to-edge（含底部导航栏 insets，仅 Android 15+ 强制）、Android 17 本地网络保护（SMB/WebDAV 专项提示）、static final 反射限制审计、配置变更行为兼容
 - Hook 跨版本兼容（HIGH-25）：小米备份类名/混淆方法名漂移时多候选自动降级 + 诊断日志，DFS AIDL transact code 漂移可观测
 - 顶部「备份」按钮点击进入智能存储备份页，长按进入备份升级页
-
-## 界面
-
-配置界面按**小米（HyperOS）应用设计语言**重构，落地要点：
-
-- **配色**：品牌色 `#FF6900` 只做点缀（主 CTA、选中态、关键强调），表面全部中性；层级靠「同一支色的不透明度」而非堆灰阶；深色模式强制对称翻转
-- **悬浮底栏**：底栏脱离内容流，浮于页面之上，24dp 圆角 + 投影 + 左右 16dp / 底部 16dp 留白；选中项为品牌色淡底胶囊；**核心操作（备份）图标常驻品牌色实心圆高亮**
-- **页面层级**：顶部标题栏随 Tab 联动（不再在每个页面重复标题）；打开二级页面时底栏自动收起、返回后回位
-- **响应式**：宽屏内容列与底栏设最大宽度并居中，控件不横向拉满；宽 ≥ 840dp 且横屏时底栏切换为左侧导航栏
-- **可访问性**：浅色 / 深色下文字对比度均满足 WCAG 2.1 AA，触控目标 ≥ 48dp，读屏描述齐备，系统关闭动画时全部过渡跳变
-
-完整的令牌表、组件规格与自查清单见本地文档 `docs/UI-DESIGN.md`（`docs/` 不参与 git 同步）。
+- 自定义 HTTP 脚本通道内置 SSRF 防护与 Rhino JS 沙箱（ClassShutter deny-all + 30s watchdog），WebView 登录关闭文件访问与通用 JS 接口
 
 ## 环境要求
 
-- Android 11.0 ~ 17（minSdk 30 / targetSdk 37，含 Android 17 本地网络保护与 edge-to-edge 适配）
-- 已安装 Xposed 框架（LSPatch / LSPosed / EdXposed 等）
-- 支持的 Xposed 作用域：`com.android.settings`、`com.miui.backup`
+| 项目 | 要求 |
+| --- | --- |
+| 系统版本 | Android 11.0 ~ 17（minSdk 30 / targetSdk 37） |
+| Xposed 框架 | LSPosed / LSPatch / EdXposed（Xposed API 82+） |
+| 模块作用域 | 勾选 `com.android.settings` 与 `com.miui.backup` |
+| 备份至 PC | 电脑端 mibackpc.exe（GitHub Release 提供，Go 交叉编译） |
 
 > **Android 17 本地网络说明**：SMB/WebDAV 局域网通道的实际网络请求运行在 `com.miui.backup` 宿主进程，
 > 其是否受 Android 17 本地网络保护（ACCESS_LOCAL_NETWORK）影响取决于小米备份 App 自身声明；
 > 模块已声明该权限并在 SMB 连接失败且目标为局域网时给出专项提示（ERR_SMB_LOCALNET）。
 
-## 架构设计
+> **生效方式**：安装模块并在 LSPosed 勾选作用域后，需**强制停止「小米备份」再重新打开**，宿主才会加载模块代码。配置入口：系统设置 → 云备份助手。
 
-模块采用分层架构，自上而下分为 Hook 层、门面层、Provider 抽象层和 Provider 实现层。Hook 层只与门面层 `CloudFileHelp` 交互，不直接接触具体协议实现，从而保证 Hook 代码稳定、协议可扩展。
+## 项目结构
+
+模块采用分层架构，自上而下分为 Hook 层、门面层、Provider 抽象层和 Provider 实现层。Hook 层只与门面层 `CloudFileHelp` 交互，不直接接触具体协议实现，保证 Hook 代码稳定、协议可扩展。
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│  Hook 层 (com.suileyan.xpmibackup.hook)                     │
-│  XposedEntry → AIDLHook / BackupHook / AutoBackupHook       │
-│  / SettingsHook                                              │
-│  注入 com.android.settings 与 com.miui.backup 两个进程        │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ 调用 CloudFileHelp 静态方法
-┌───────────────────────────▼─────────────────────────────────┐
-│  门面层 (com.suileyan.comm.CloudFileHelp)                    │
-│  统一入口：upload / download / list / delete / cleanup       │
-│  统一切片：uploadChunked / downloadChunked / manifest        │
-│  AUTH_EXPIRED 捕获：调用 provider.refresh() 后重试一次        │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ 委托 ProviderRegistry.active()
-┌───────────────────────────▼─────────────────────────────────┐
-│  Provider 抽象层 (com.suileyan.cloud)                        │
-│  CloudProvider 接口 + ProviderRegistry 注册表                │
-│  AbstractCloudProvider 基类（Profile + ThreadLocal 凭据注入）│
-│  ProgressCallback / CloudException / RetryPolicy             │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-┌───────────────┬──────────────────┬──────────────────┬─────────────────────┐
-│  NAS 方案     │  云盘账号         │  云盘账号         │  自定义脚本          │
-│  SmbProvider  │  Yun139Provider   │  Pan123Provider   │  ScriptProvider     │
-│  WebdavProvider│ GuangyaProvider  │  TianyiProvider   │  (Rhino JS 沙箱 v2) │
-│  (继承基类)   │  QuarkProvider    │  BaiduProvider    │  (继承基类)         │
-│               │  WoProvider       │   （已撤销 115）  │                     │
-│               │  (继承基类)       │  (继承基类)       │                     │
-└───────────────┴──────────────────┴──────────────────┴─────────────────────┘
+小米备份 App（宿主）
+   │  DFS AIDL 重定向
+┌──▼──────────────────────────────────────────────────────┐
+│  Hook 层    XposedEntry → AIDLHook / BackupHook          │
+│             / AutoBackupHook / SettingsHook              │
+├─────────────────────────────────────────────────────────┤
+│  门面层    CloudFileHelp：统一 upload/download/list       │
+│            + 切片（背压/取消/分片回收）+ 过期重试          │
+├─────────────────────────────────────────────────────────┤
+│  Provider 层  CloudProvider 接口 + ProviderRegistry       │
+│               AbstractCloudProvider 基类                  │
+├──────────┬──────────┬──────────┬──────────┬─────────────┤
+│ NAS 方案  │ 云盘账号  │ 云盘账号  │ 备份至 PC │ 自定义脚本   │
+│ Smb      │ 139/光鸭  │ 189/百度  │ mibackpc │ Rhino 沙箱  │
+│ WebDAV   │ 夸克/阿里 │ 沃盘      │ (Go)     │ ScriptProvider│
+└──────────┴──────────┴──────────┴──────────┴─────────────┘
 ```
 
 ### 双进程注入
 
 模块注入两个不同 UID 的进程，进程间通过 sdcard 上的 JSON 文件通信：
 
-| 进程                     | 职责                        | 注入的 Hook                           |
-| ---------------------- | ------------------------- | ---------------------------------- |
-| `com.android.settings` | 展示配置 UI、管理账号 / 方案、发起登录    | SettingsHook                       |
-| `com.miui.backup`      | 拦截 DFS AIDL、执行备份 / 恢复文件传输 | AIDLHook、BackupHook、AutoBackupHook |
+| 进程 | 职责 | 注入的 Hook |
+| --- | --- | --- |
+| `com.android.settings` | 展示配置 UI、管理账号 / 方案、发起登录 | SettingsHook |
+| `com.miui.backup` | 拦截 DFS AIDL、执行备份 / 恢复文件传输 | AIDLHook、BackupHook、AutoBackupHook |
 
-由于 Android Keystore 密钥按进程 UID 隔离无法跨进程共享，凭据加密存储（见下文）采用「固定种子 + 随机文件盐 + PBKDF2 派生」方案，使两个进程读同一文件得到同一密钥。
+由于 Android Keystore 密钥按进程 UID 隔离无法跨进程共享，凭据加密存储采用「固定种子 + 随机文件盐 + PBKDF2（600000 迭代）派生」方案，使两个进程读同一文件得到同一密钥；跨进程配置一致性靠方案文件的 mtime + 长度变化整体失效缓存。
 
-> **关于固定种子（KEY_SEED）的架构妥协**
->
-> `EncryptedCredStore` 中的 `KEY_SEED` 是硬编码在 APK 中的常量（`"xp-mibackup-credential-v1"`），用于派生主密钥：
-> - 无盐场景：`SHA-256(KEY_SEED)` 直接作为 AES-GCM 密钥
-> - 有盐场景：`PBKDF2(KEY_SEED, salt, 600000)` 派生密钥（salt 随机生成并随 creds.json 持久化；v2 旧值 20000 读取兼容、写时自动升级）
->
-> **已知风险**：反编译 APK 可获取 `KEY_SEED`，若同时拿到设备上的 `creds.json`（含 salt + 密文），即可重建密钥解密所有凭据。
->
-> **为何不使用 Android Keystore**：Keystore 密钥按 UID 隔离，`com.android.settings`（UID 1000）创建的密钥无法被 `com.miui.backup`（不同 UID）使用，而本模块的两个进程必须读同一份凭据文件。在跨进程共享密钥这一硬约束下，固定种子是当前唯一可行的方案。
->
-> **缓解措施**：`creds.json` 存放于应用私有目录，正常情况下其他应用无法直接读取；root 设备除外（root 用户可读取任意应用数据，这是 root 环境的固有风险，非本模块可解决）。
-
-### 备份目标分发
-
-`ProviderRegistry.active()` 按以下优先级返回当前备份目标的 Provider：
-
-1. **云盘备份目标**（`backup_target.json` 中 `mode=cloud`）：按云盘账号 id 构造 `Yun139Provider` / `GuangyaProvider` / `QuarkProvider` / `Pan123Provider` / `TianyiProvider` / `BaiduProvider`
-2. **NAS 激活方案**（`profiles.json` 中 `activeId`）：按方案 type 构造 `SmbProvider` / `WebdavProvider` / `ScriptProvider`
-
-NAS 方案 Provider 实例按 profileId 缓存；云盘账号 Provider **不缓存**（凭据可能因重新登录变化，每次重新构造读取最新凭据）。
-
-### 切片与 manifest
-
-切片逻辑统一在 `CloudFileHelp` 层，Provider 只处理整文件传输：
-
-- 文件大于 `chunk_size_mb` 时切片，生成 `原文件.part00000`、`原文件.part00001` … 和 `原文件.mibak.json` manifest
-- **背压**：切分前先取「在途分片额度」（`Semaphore(并发+2)`），取不到就等——切分只是本地盘读写（数百 MB/s），上传要过网络（实测 ~39MB/s），不限流会把整个大项在几十秒内切成上百片堆在盘上
-- **分片目录**：`<AllBackupTemp>/miback/`（模块专属），不写在宿主备份目录里，避免宿主清理自身目录时连带清掉
-- 上传失败冻结时清理已上传的远端分片与残留 manifest，避免重试把旧分片当有效数据；**取消**时云端目录整体被删，跳过逐片清理（只刷 404）
-- **失败或取消不删本地源文件**：上传返回值参与 `auto_delete_local` 判定，避免"传失败还把本地备份删了"
-- 恢复时优先读 manifest 合并分片，manifest 不存在时按未切片的旧文件读取
-- manifest 含分片数 / 文件大小可信上限校验，防止远端恶意 manifest 导致异常
-
-## Token 与凭据管理
-
-### 凭据加密存储（EncryptedCredStore）
-
-所有敏感凭据（密码、Token、Cookie、脚本正文）经 `EncryptedCredStore` 加密后落盘到 `/sdcard/MIUI/backup/sly/creds.json`，明文不出现在 sdcard 上。
-
-| 维度     | 方案                                        |
-| ------ | ----------------------------------------- |
-| 算法     | AES-256-GCM（带 128-bit 认证标签），IV 随机且随密文存储   |
-| 密钥派生   | PBKDF2-HmacSHA256（600000 迭代，v3），固定种子 + 随机文件盐；旧格式读取兼容、写时自动升级 |
-| 跨进程一致性 | 文件盐随文件持久化，settings 与 backup 进程读同一文件得到同一密钥 |
-| 隔离     | 按 accountId / profileId 命名空间隔离，账号间互不可见    |
-| 原子写入   | 临时文件 + rename 原子替换 + 文件锁，防截断与并发覆盖         |
-| 兼容     | 旧版无盐格式自动兼容读取，任意写操作触发升级重加密                 |
-| 缓存     | 进程内解密缓存（TTL 10 分钟），文件修改时间 + 大小变化自动失效      |
-
-### 各通道凭据与刷新策略
-
-| 通道     | 凭据类型                         | 获取方式           | 静默刷新                       | 过期处理                  |
-| ------ | ---------------------------- | -------------- | -------------------------- | --------------------- |
-| SMB    | 账号密码                         | 设置页录入          | 无需                         | 重新录入                  |
-| WebDAV | 账号密码                         | 设置页录入          | 无需                         | 重新录入                  |
-| 自定义脚本  | 脚本内自管理                       | 设置页粘贴 JS       | 脚本 `stateGet/stateSet` 持久化 | 脚本自行处理                |
-| 139 云盘 | Authorization（Basic）         | WebView 网页登录捕获 | 不支持（Cookie 型）              | 引导重新登录                |
-| 光鸭云盘   | access_token + refresh_token | WebView 网页登录捕获 | OAuth2 refresh_token 自动轮换  | refresh_token 失效则引导重登 |
-| 夸克云盘   | Cookie（含 __puus 会话）       | WebView 网页登录捕获 | __puus 响应 Set-Cookie 自动续期 | 会话失效则引导重新登录        |
-| 阿里云盘   | refresh_token（轮换）          | WebView 网页登录捕获 | auth.alipan.com 刷新自动轮换（secp256k1 设备签名） | refresh_token 失效则引导重登 |
-| 123云盘   | Bearer token（JWT）          | WebView 网页登录捕获 | 不支持（Token 型）              | 引导重新登录                |
-| 天翼云盘(189) | SSON Cookie + access_token + refresh_token | WebView 网页登录捕获 | refreshToken 自动轮换；InvalidAccessToken/InvalidSessionKey 自愈重试 | 会话失效则引导重新登录 |
-| 百度网盘   | Cookie（含 BDUSS）            | WebView 网页登录捕获 | 不支持（BDUSS 无刷新机制）         | BDUSS 失效则引导重新登录     |
-| 联通沃盘   | access_token（36 位 UUID）    | WebView 网页登录捕获 | 无 refresh_token，9999 时用现有 access_token 重试一次 | 1001 无效令牌则引导重新登录 |
-
-> **115 网盘已撤销支持**：其 WebView Cookie 凭据（UID/CID/SEID/KID）与 `webapi.115.com` 直连实现仍在代码中保留，但因 115 对高频 API 请求的风控过于频繁（账号级 405 拦截持续数分钟），实际无法稳定用于备份/恢复，故从 v0.8.0 起对外移除（UI 隐藏全部入口，历史账号数据保留）。
-
-### 光鸭云盘 OAuth2 刷新
-
-光鸭采用 OAuth2 授权码体系，`access_token` 过期后用 `refresh_token` 换新：
-
-- 任意业务 API 返回 401 时，`callApi` 自动调用 `refreshAccessToken()` 刷新后重试一次
-- `refresh_token` 为单次使用（每次刷新返回新的 refresh_token），刷新过程加 `REFRESH_LOCK` 串行化，避免多线程并发刷新导致 refresh_token 轮换冲突使账号锁定
-- 刷新成功后新 access_token / refresh_token 立即写回 `EncryptedCredStore`
-- refresh_token 也失效时抛出 `AUTH_EXPIRED`，由 `CloudFileHelp` 回调通知 UI 引导重新登录
-
-### 夸克云盘 Cookie 会话与 OSS 上传
-
-夸克网盘无公开 OAuth，凭据为网页登录后的完整 Cookie（含 `__puus` 会话凭证），API 请求把整体 Cookie 作为认证：
-
-- **登录**：WebView 加载 `pan.quark.cn` 完成网页登录，捕获 Cookie 时合并 `pan / drive / drive-pc / passport` 四个子域（登录态可能落在任一域），后台 `GET /file/sort` 验证通过后保存；未完成登录会明确提示
-- **会话续期**：`__puus` 有效期约 3 小时。每次 API 响应解析 `Set-Cookie` 中的新 `__puus` 并实时合并回加密存储；401 时自动用「剥离 `__puus` 的 Cookie」请求 `/config` 让服务端重新下发会话凭证后重试一次
-- **上传（OSS 五步）**：`file/upload/pre` 预上传 → `file/update/hash` 上报 md5/sha1（可秒传）→ `file/upload/auth` 换取分片授权 → OSS `PUT` 分片直传（分片大小取 pre 响应下发的 `part_size`）→ `file/upload/auth` 换合并授权 + OSS `CompleteMultipartUpload` → `file/upload/finish` 确认
-- **签名要点**：OSS 签名由服务端按 `auth_meta` 签发，请求头必须与实际发送完全一致（Content-Type 需含 `; charset=utf-8` 等细节），否则返回 `403 SignatureDoesNotMatch`
-- **列表 / 下载**：`GET /file/sort` 分页列目录；`POST /file/download` 换取直链后流式下载（带 Cookie/Referer/UA）
-
-### 阿里云盘（aliyun）Web API + 设备签名
-
-阿里云盘无对个人开放的免注册 API，实现参考在维护的第三方项目 [AlistGo/alist](https://github.com/AlistGo/alist) `drivers/aliyundrive`（Web API + Android 客户端仿真）：
-
-- **登录**：WebView 加载 `www.alipan.com` 完成网页登录，扫描 localStorage 提取 `refreshtoken`（显式键名 + 通配扫描双保险）；「完成」后立即刷新换新验证（refresh_token 单次轮换即校验有效性）再保存
-- **Token 续期**：`auth.alipan.com/v2/account/token`（grant_type=refresh_token，无需 client_id）刷新，access_token 约 2 小时有效；轮换新 refresh_token 立即写回加密存储；业务 API 遇 401/`AccessTokenInvalid` 自动刷新重试一次
-- **设备签名**：以 user_id 派生 secp256k1 密钥（deviceID = SHA-256(user_id) 即私钥），`users/v1/users/device/create_session` 注册公钥；每个请求携带 `X-Signature`（SHA-256("secpAppID:deviceID:userID:0") 签名）、`X-Device-Id`、`X-Canary`（Android 客户端标识）；遇 `DeviceSessionSignatureInvalid` 自动注册重试。secp256k1 为纯 JDK BigInteger 实现（Android JCE 不支持该曲线），经已知曲线向量与签名往返验证
-- **上传**：`adrive/v2/file/createWithFolders`（10MB 分片预签名 OSS 地址）→ 分片 `PUT` 直传（无鉴权头）→ `v2/file/complete` 提交；0 字节文件（end 标记）对齐其他通道 mock 成功
-- **列表 / 下载 / 删除**：`v2/file/list`（marker 翻页）；`v2/file/get_download_url` 直链下载（OSS 下载必须带 alipan Referer）；`v2/recyclebin/trash` 入回收站式删除
-
-### 天翼云盘（189）会话与签名
-
-天翼云盘无公开 OAuth App，凭据为网页登录后的 `SSON` Cookie，API 请求按域名使用三类签名（对齐 [wes-lin/cloud189-sdk](https://github.com/wes-lin/cloud189-sdk)）：
-
-- **登录链**：WebView 捕获 `SSON` Cookie → `getSessionForPC` 换 `sessionKey`（响应为 JSON 字段，`res_code` 可能是数字或字符串错误码，已兼容）→ 用 `sessionKey` 经 `getAccessTokenBySsKey` 换取 `accessToken`（该接口不直接返回 accessToken）
-- **会话续期**：内存快路径 → 持久化有效会话 → `sessionKey` 续 `accessToken` → `accessToken` 直登 → `refreshToken` 轮换 → SSON 兜底，全程 `synchronized` 单飞；`InvalidAccessToken` / `InvalidSessionKey`（HTTP 400）自动清空对应 token 重试
-- **上传（完整复刻 SDK）**：`partSize` 三段式（10MiB / 20MiB / 大文件公式）→ `initMultiUpload`（单分片带 `fileMd5`/`sliceMd5`，多分片 `lazyCheck=1`）→ `checkTransSecond` 秒传 → `getMultiUploadUrls` 取服务端签发 PUT 签名 → 并发 5 分片直传（`requestHeader` 透传）→ `commitMultiUploadFile`
-- **签名要点**：api 域 `Accesstoken`（小写 t）MD5 参数签名头；upload 域 `signatureUpload`——业务参数 AES-128-ECB 加密为 `params`，uuid 经 RSA 加密为 `EncryptionText`，请求数据 HMAC-SHA1 为 `Signature`；`generateRsaKey` 在会话有效时返回 **XML**（`<keyPair><pubKey>…`）而非 JSON，解析已双格式兼容
-- **列表 / 下载 / 删除**：`open/file/listFiles.action` 分页；`getFileDownloadUrl` 直链流式下载；`batch/createBatchTask(DELETE)` + `checkBatchTask` 轮询删除
-
-### 百度网盘（baidu）xpan
-
-百度网盘无开放上传 API，凭据为网页登录后的完整 Cookie（核心为 `BDUSS`），直连 xpan 接口（`pan.baidu.com/api`，`app_id=250528`，可访问全盘）：
-
-- **登录**：WebView 加载 `pan.baidu.com`，捕获时合并 `pan / passport` 两个域的 Cookie 按名去重；`BDUSS` 缺失视为未完成登录
-- **写操作凭据**：`gettemplatevariable` 获取 `bdstoken` 并缓存，写端点携带，失效（errno -2/2）自动清缓存重取
-- **上传**：`precreate`（4MB 块 `block_list` + `content-md5`；响应 `block_list` 为空数组 = 秒传命中，跳过上传直接合并）→ `superfile2` 并发 3 分片（partseq 0 起，multipart，响应 md5 与本地比对，失败重传一片）→ `create`（type=2）合并；合并失败（31081/31363）整文件重传一次。注：旧 `rapidupload` 接口已被百度限制（errno=2），秒传检测统一由 `precreate` 承担
-- **下载 / 删除**：`filemetas` 取 `dlink` 直链流式下载（带 Cookie/Referer/UA + 长度校验）；`filemanager`（opera=delete，`filelist` 须含 `fs_id`）
-- **过期处理**：`errno -6` / HTTP 403+31045 → `AUTH_EXPIRED` 引导重新登录；删除类写操作可能触发 `errno=132` 安全验证风控（账号级，API 无法绕过，仅记日志）
-
-### 联通沃盘（wo）
-
-联通沃盘无开放 API 文档，凭据为网页登录后的 `access_token`（36 位 UUID），API 走 `dispatcher` 通道路由：
-
-- **登录**：WebView 加载 `pan.wo.cn`，拦截前端 API 请求头中的 `Accesstoken` 捕获（dispatcher 请求必带）；验证失败时重扫 localStorage 兜底（防捕获到登录前中间态 token）
-- **通道**：`api-user`（AppQueryUser 验证登录态）/ `wohome`（文件操作）/ `woopen`（上传），由请求方法路由
-- **建目录**：`CreateDirectory` 须携带默认家庭空间 ID（`FamilyUserCurrentEncode.defaultHomeId`，个人云同样要求），否则返回 9999
-- **上传**：`upload2C` 8MiB 分片直传（`secret=true` 加密请求体）；`QueryAllFiles` 列表
-- **过期处理**：`RSP_CODE=1001` → `AUTH_EXPIRED` 引导重新登录；`9999 系统异常` 时无 refresh_token（web 端仅提供 UUID token）用现有 access_token 重试一次
-
-### 115 网盘（已撤销支持，v0.8.0 起）
-
-> 115 网盘因风控过于频繁（账号级 405 拦截持续数分钟、下载 URL 亦被限）无法稳定支撑备份/恢复，**v0.8.0 起对外撤销支持**：UI 全部入口隐藏（添加页、备份目标、账号列表），已登录账号数据保留。实现代码（`Pan115Provider`，OSS POST 直传 + downurl RSA+XOR 解密）仍保留，若 115 风控策略缓解可恢复。
->
-> 曾实现要点：WebView 捕获 Cookie（`UID/CID/SEID/KID`）→ `files/add` 建目录 → `sampleinitupload` 取 OSS 凭证（POST 表单直传，callback 注册）→ `downurl` RSA+XOR 解密取直链下载 → `rb/delete` 删除。
-
-### 123 云盘（已暂停支持，v0.9.5 起）
-
-> 123 云盘 API 宿主迁移至 `api.123278.com` 后接口行为不稳定（建目录路由 404、JSON 请求挂起等问题已逐层修复，但上传链路仍待真机充分验证），**v0.9.5 起对外暂停支持**：UI 全部入口隐藏（添加页、备份目标、账号列表），历史备份目标自动清除回退，已登录账号数据保留。实现代码（`Pan123Provider`，签名 form 上传 + 5MB 分块 S3 直传）仍保留，待服务端链路验证通过后恢复。
-
-### 139 云盘签名与路由
-
-139 云盘无标准 OAuth，凭据为网页登录后的 `Authorization`（Basic Base64），API 请求需附加 `mcloud-sign` 签名头：
-
-- 签名算法：`sign = MD5( MD5(Base64(sort(encodeURIComponent(body)))) + MD5(ts + ":" + rand) )` 大写
-- 签名头格式：`Mcloud-Sign: ts,rand,sign`（三段，缺一不可）
-- API 节点：登录时捕获的 personal 节点 host 优先；缺失时调 `qryRoutePolicy` 路由查询解析 personal 节点；最终回退主站
-- 过期处理：401/403 抛 `AUTH_EXPIRED`，因 Cookie 型无法静默刷新，引导用户重新 WebView 登录
-
-### 自定义脚本状态持久化
-
-脚本通道通过 `stateGet(key, default)` / `stateSet(key, value)` 持久化刷新后的 Cookie 或 Token，状态同样经 `EncryptedCredStore` 加密落盘，按脚本账号 id 隔离。脚本可自行实现 token 刷新逻辑并在 `stateSet` 中保存新 token。
-
-### 备份中途过期处理
-
-`CloudFileHelp.uploadWithProgress` / `downloadFile` 捕获 `CloudException(AUTH_EXPIRED)`：
-
-- 调用 `provider.refresh()`，成功则重试当前操作一次
-- 切片上传中途过期：重试当前 part，不丢弃已传分片
-- 连续失败上报 `onFinish(code=-1, msg="登录已过期")`
-
-## 配置
-
-配置入口：系统设置 -> 云备份助手
-
-### 配置文件
-
-| 文件                                        | 说明                             | 敏感性    |
-| ----------------------------------------- | ------------------------------ | ------ |
-| `/sdcard/MIUI/backup/config.ini`          | 全局非敏感配置（路径、线程数、切片大小、设备名等）      | 非敏感    |
-| `/sdcard/MIUI/backup/profiles.json`       | NAS 方案列表 + activeId            | 非敏感元数据 |
-| `/sdcard/MIUI/backup/cloud_accounts.json` | 云盘账号列表                         | 非敏感元数据 |
-| `/sdcard/MIUI/backup/backup_target.json`  | 当前备份目标（cloud / profile + id）   | 非敏感    |
-| `/sdcard/MIUI/backup/creds.json`          | 加密凭据（密码 / Token / Cookie / 脚本） | **加密** |
-
-### 全局配置项
-
-| 配置项               | 说明                   | 默认值           |
-| ----------------- | -------------------- | ------------- |
-| `backup_path`     | 云端备份根目录              | `MIUI/backup` |
-| `upload_threads`  | 并发上传线程数              | `3`           |
-| `chunk_size_mb`   | 上传切片大小（MB）；`0` 表示不切片 | `64`          |
-| `backup_max`      | 最大保留备份数；`0` 表示不自动清理  | `5`           |
-| `device_name`     | 设置页展示的虚拟设备名称         | -             |
-| `device_describe` | 设置页展示的虚拟设备描述         | -             |
-
-### NAS 方案配置（profiles.json）
-
-每条方案包含非敏感连接参数，敏感凭据（密码）单独存入加密存储：
-
-**SMB 方案参数**
-
-| 参数                                                   | 说明                       |
-| ---------------------------------------------------- | ------------------------ |
-| `smb_server` / `smb_port` / `smb_share` / `smb_user` | 连接参数（非敏感）                |
-| `smb_pass`                                           | 密码（存 EncryptedCredStore） |
-
-**WebDAV 方案参数**
-
-| 参数                           | 说明                       |
-| ---------------------------- | ------------------------ |
-| `webdav_url` / `webdav_user` | 连接参数（非敏感）                |
-| `webdav_pass`                | 密码（存 EncryptedCredStore） |
-
-**自定义脚本方案参数**
-
-| 参数                  | 说明                                     |
-| ------------------- | -------------------------------------- |
-| `custom_script_b64` | Base64 编码的 JS 脚本（存 EncryptedCredStore） |
-
-自定义脚本的写法、接口说明和示例见 [自定义 HTTP 脚本文档](plugins/README.md)。
-
-### 云盘账号配置（cloud_accounts.json）
-
-云盘账号通过设置页「账号」Tab 添加，选择网盘类型后经 WebView 登录捕获凭据：
-
-| 字段         | 说明                     |
-| ---------- | ---------------------- |
-| `id`       | 账号唯一标识                 |
-| `provider` | 网盘类型：`139`、`guangya`、`quark`、`123`、`189`、`baidu` 或 `wo` |
-| `account`  | 登录账号（139 为手机号，189 为登录名） |
-| `name`     | 显示名称                   |
-
-登录捕获的 `Authorization` / `access_token` / `refresh_token` / `SSON` / `Cookie` / `host` 等敏感凭据存入 EncryptedCredStore，按账号 id 隔离。
-
-### 旧配置自动迁移
-
-首次启动检测到旧 `config.ini` 含 `protocol` + `smb_*` / `webdav_*` / `custom_script_b64` 且无方案时，自动迁移为一条默认 NAS 方案并设为激活，敏感凭据迁入 EncryptedCredStore，升级无感。
-
-同时把散落在 `/sdcard/MIUI/backup/` 的模块文件（`config.ini`、`creds.json`、`profiles.json`、`cloud_accounts.json`、`backup_target.json`、`logs/`）整体迁入 `sly/` 子目录（rename 优先，跨进程幂等）。
-
-> **跨进程配置一致性**：UI 进程（模块 App / 设置页）与宿主进程（`com.miui.backup`）各自持有静态缓存，`invalidate()` 传不过去。方案文件的**修改时间 + 文件长度**一旦变化，两个进程都会整体丢弃自己的 Provider 缓存重建——所以「在 UI 里把电脑备份切到 USB」能立刻对宿主生效。
-
-## 云端目录
-
-默认远端根目录 `MIUI/backup`，备份目录示例：
-
-```text
-MIUI/backup/20260711_000000/
-  descript.xml
-  end
-  ...
-```
-
-DFS 虚拟路径中的 `.AllBackup`、`.AppBackup` 等片段不会写入云端真实路径。
-
-## 项目结构
+### 代码目录
 
 ```text
 app/src/main/java/com/suileyan/
   cloud/                          云端抽象与账号层
     CloudProvider.java            统一接口
-    provider/AbstractCloudProvider  Provider 公共基类（Profile + ThreadLocal 凭据注入）
-    CloudProvider 实现：SmbProvider / WebdavProvider / ScriptProvider
-                      Yun139Provider / GuangyaProvider / QuarkProvider
-                      Pan123Provider / TianyiProvider / BaiduProvider
-                      WoProvider  (provider/；Pan115Provider 已撤销支持，代码保留)
+    provider/AbstractCloudProvider  Provider 公共基类
+    provider/                     Smb / Webdav / Yun139 / Guangya / Quark
+                                  / Tianyi / Baidu / Wo Provider（Pan123、Pan115 代码保留）
     ProviderRegistry.java         Provider 注册表与活跃目标分发
-    ProfileStore / Profile        NAS 方案持久化与模型
-    CloudAccountStore / CloudAccount  云盘账号持久化与模型
-    BackupTarget                  跨进程备份目标持久化
-    EncryptedCredStore            凭据加密存储（AES-GCM + PBKDF2，固定种子见架构妥协说明）
-    RetryPolicy / CloudException  重试策略与统一异常
-    ProgressCallback / ListenerProgressCallback  进度回调
-    login/Yun139Login             139 登录与签名算法
+    ProfileStore / CloudAccountStore / BackupTarget  方案 / 账号 / 目标持久化
+    EncryptedCredStore            凭据加密存储（AES-256-GCM + PBKDF2）
+    RetryPolicy / CloudException / ProgressCallback  重试 / 异常 / 进度回调
   comm/                           文件操作门面与配置层
-    CloudFileHelp                 统一入口 + 切片（背压/取消/分片回收）+ AUTH_EXPIRED 重试
-    SmbFileHelp / WebdavFileHelp  协议实现
-    CustomHttpFileHelp            自定义 HTTP 脚本入口（Rhino 沙箱 v2 + ClassShutter）
-    ScriptFunctions               沙箱宿主函数库（24+：加密/HTTP/文件/console/工具）
-    ScriptWatchdog                沙箱指令计数超时保护（ContextFactory 30s deadline）
-    ConfigHelp                    全局配置读写 / sly 目录布局与旧文件迁移
-    LocalBackupFileHelp           宿主备份临时目录解析与模块临时区
+    CloudFileHelp                 统一入口 + 切片（背压/取消/分片回收）
+    SmbFileHelp / WebdavFileHelp / CustomHttpFileHelp  协议实现与脚本入口
+    ScriptFunctions / ScriptWatchdog  沙箱宿主函数库（24+）与超时保护
+    ConfigHelp / LocalBackupFileHelp  配置读写与目录布局迁移
     PcDiscovery / PcPair          电脑端发现（USB 优先归一化）与配对
-    BackupCancel                  备份取消信号（按请求时刻判定，上传链路据此立即停）
-    TransferSpeed                 实时上传速率统计（进度页角标用）
-    Secp256k1                     PC 配对的 ECDH 曲线实现
-    Async                         共享守护线程池
-    AtomicFile                    原子文件写入（唯一临时名 + rename + 文件锁）
-    LogHelp / CrashLog            分段日志（主日志 + _err.log）与崩溃留痕
+    BackupCancel / TransferSpeed  取消信号（按请求时刻判定）/ 实时速率统计
+    Secp256k1 / Async / AtomicFile  ECDH 曲线 / 守护线程池 / 原子文件写入
+    LogHelp / CrashLog            分段日志与崩溃留痕
   xpmibackup/                     Xposed 模块入口与 Hook
     XposedEntry                   模块入口
-    hook/
-      AIDLHook                    DFS AIDL 重定向
-      BackupHook                  备份页面 / 通知 / 取消处理 / 进度口径与速率角标
-      ProgressSpeedBadge          进度页总进度条右侧的实时速率角标
-      AutoBackupHook              自动备份调度
-      SettingsHook                设置页入口注入
-    ui/                           配置界面 Fragment
-      （MainActivity 承载悬浮底栏与 overlay 二级页面路由；
-        ui/ 下为设备配置 / NAS / 云盘账号 / 备份 四个常驻页 + 设置 / 关于 /
-        网盘选择 / 网页登录 / 脚本帮助五个二级页；
-        设计令牌见 res/values/{colors,dimens,styles}.xml 与 values-night/ 同名文件）
+    hook/                         AIDLHook / BackupHook / AutoBackupHook
+                                  / SettingsHook / ProgressSpeedBadge
+    ui/                           配置界面 Fragment（HyperOS 设计语言）
+pc/                               电脑端 mibackpc（Go 单文件，端口 8321/8322）
+plugins/                          自定义 HTTP 脚本示例
 ```
 
-### 实现说明
+## 从源码编译
 
-| 模块                   | 作用                                         |
-| -------------------- | ------------------------------------------ |
-| `SettingsHook`       | 在设置 App 中注入配置入口，展示虚拟智能存储设备                 |
-| `AIDLHook`           | 模拟 DFS 服务连接，拦截上传、下载、目录查询，分发到 CloudFileHelp |
-| CloudFileHelp      | 统一分发十一种通道，处理跨协议切片（背压 / 取消 / 分片回收）与 AUTH_EXPIRED 重试 |
-| `BackupHook`         | 修正备份 App 页面、通知、进度口径与焦点，取消清理，进度页速率角标         |
-| `AutoBackupHook`     | 接入备份 App 原生自动备份设置和调度链路                     |
-| `PcDiscovery`        | 电脑端发现（USB 条目优先归一化、按名同机校验）与配对               |
-| `BackupCancel`       | 备份取消信号（按请求时刻判定），上传链路据此立即停止              |
-| `TransferSpeed`      | 实时上传速率统计，供进度页角标显示                        |
-| `ProviderRegistry`   | 按备份目标（云盘账号优先，其次激活方案）取 Provider 实例          |
-| `EncryptedCredStore` | AES-GCM 加密凭据，按账号隔离，跨进程共享                   |
-
-## 编译
-
-需要 JDK 17+ 和 Android SDK（compileSdk 37）。
+模块端需要 JDK 17+ 和 Android SDK（compileSdk 37）：
 
 ```bash
 cd src
@@ -433,25 +154,28 @@ gradlew assembleDebug
 
 调试 APK 输出：`app/build/outputs/apk/debug/app-debug.apk`
 
-安装后在 Xposed/LSPosed 中启用模块，勾选作用域 `com.android.settings` 与 `com.miui.backup`，重启目标 App 或设备。
+电脑端 mibackpc（可选，Go 1.22+，纯标准库零 CGO）：
+
+```bash
+cd pc
+gofmt -l . && go vet ./... && go test ./...
+GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/mibackpc.exe .
+```
+
+安装后在 Xposed/LSPosed 中启用模块，勾选作用域 `com.android.settings` 与 `com.miui.backup`，强制停止并重新打开「小米备份」即可生效。
 
 ## 依赖
 
-| 库                                          | 用途                          |
-| ------------------------------------------ | --------------------------- |
-| [Xposed API](https://api.xposed.info/)     | 框架 Hook 能力                  |
-| [smbj](https://github.com/hierynomus/smbj) | SMB/CIFS 协议                 |
-| [OkHttp](https://square.github.io/okhttp/) | HTTP 客户端（WebDAV / 139 / 光鸭 / 夸克 / 123 / 189 / 百度） |
-| [Rhino](https://github.com/mozilla/rhino)  | 自定义 HTTP 脚本 JS 运行时          |
+| 库 | 版本 | 用途 |
+| --- | --- | --- |
+| [Xposed API](https://api.xposed.info/) | 82 | 框架 Hook 能力 |
+| [smbj](https://github.com/hierynomus/smbj) | 0.13.0 | SMB/CIFS 协议 |
+| [OkHttp](https://square.github.io/okhttp/) | 4.12.0 | HTTP 客户端（WebDAV / 139 / 光鸭 / 夸克 / 189 / 百度 / 沃盘 / 阿里） |
+| [Rhino](https://github.com/mozilla/rhino) | 1.9.1 | 自定义 HTTP 脚本 JS 运行时（沙箱） |
+| androidx.annotation | 1.6.0 | 仅 `@RequiresApi` 注解（不打包进 APK） |
 
-## 安全说明
-
-- 所有密码、Token、Cookie 经 AES-256-GCM 加密落盘，明文不接触 sdcard
-- 凭据按账号 / 方案 id 隔离，互不可见
-- 自定义 HTTP 通道内置 SSRF 防护：拦截私有 IP（10/172.16/192.168/169.254/127/::1/ULA fc00::/7）、禁止重定向到内网、对八进制 / 十六进制 IP 编码做解析后校验
-- WebView 登录关闭文件访问与通用 JS 接口，登录完成清理 Cookie
-- 日志输出脱敏，不打印完整 Token / 密码
+电脑端 mibackpc 为 Go 实现，纯标准库、零第三方依赖、零 CGO。
 
 ## 许可证
 
-[MIT License](LICENSE)
+本项目基于 [MIT License](LICENSE) 开源。
