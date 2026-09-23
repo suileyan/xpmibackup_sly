@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/icon.svg" width="140" alt="MiBackup_sly"/>
+  <img src="assets/icon.png" width="140" alt="MiBackup_sly"/>
   <h1>MiBackup_sly</h1>
   <p><b>小米云备份助手</b> · 把小米备份存到你自己的云盘 / NAS / 电脑</p>
   <p>
