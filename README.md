@@ -20,13 +20,34 @@
 
 ## 项目介绍
 
-小米手机自带的「小米备份」只能存到小米云或本地。**MiBackup_sly** 是一个 Xposed / LSPosed 模块：通过虚拟小米智能存储设备，把小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的谷歌云端硬盘（Google Drive）、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、天翼云盘（189）、百度网盘、联通沃盘，实现备份与恢复数据的云端存储——小米备份原本怎么用，现在还怎么用，只是目标变成了你自己的存储。
+小米手机自带的「小米备份」只能存到小米云或本地。**MiBackup_sly** 是一个 Xposed / LSPosed 模块：它向小米备份提供一个「虚拟小米智能存储设备」，把备份与恢复的文件操作重定向到**你自己的存储**——NAS、自建脚本、8 家云盘，或直连电脑。小米备份原本怎么用，现在还怎么用，只是目标换成了你自己的存储。
 
-本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延伸版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储（AES-256-GCM）、谷歌云端硬盘（Google Drive）、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、天翼云盘（189）、百度网盘、联通沃盘内置 Provider、OAuth2/会话自动刷新、备份至 PC 等能力。
+本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 的延伸版本，在原版 SMB / WebDAV / 自定义脚本三通道基础上，新增多账号管理、凭据加密存储（AES-256-GCM）、云盘 Provider、OAuth2 / 会话自动刷新、备份至 PC 等能力。
 
 - 源码：https://github.com/suileyan/xpmibackup_sly
 - 下载（签名 APK + 电脑端 mibackpc.exe）：https://github.com/suileyan/xpmibackup_sly/releases
 - 各版本变更见 [CHANGELOG.md](CHANGELOG.md)
+
+## 支持通道
+
+共 **12 种可用通道**：NAS 2 种 + 自建 2 种 + 云盘 8 种。
+
+| 分类 | 通道 | 登录方式与说明 |
+| --- | --- | --- |
+| NAS | **SMB/CIFS** | 填服务器地址、共享名与账号；匿名访问可留空用户名 |
+| NAS | **WebDAV** | 必须 HTTPS（Android 系统要求） |
+| 自建 | **自定义 HTTP 脚本** | 用 JS 脚本对接任意存储；内置 SSRF 防护与 Rhino 沙箱 |
+| 自建 | **备份至 PC** | 配套电脑端 mibackpc，自动发现 + 配对，USB 通道优先 |
+| 云盘 | 移动云盘（139） | 内嵌网页登录 |
+| 云盘 | 光鸭云盘 | 内嵌网页登录；OAuth2 Token 自动刷新 |
+| 云盘 | 夸克云盘 | 内嵌网页登录；`__puus` 会话自动续期 |
+| 云盘 | 阿里云盘 | 内嵌网页登录；secp256k1 设备签名，refresh_token 轮换 |
+| 云盘 | **Google Drive** | 系统浏览器 loopback 授权（Google 拒绝 WebView 内 OAuth）；scope 为 `drive.file`，只管理本模块上传的文件；需能访问 Google |
+| 云盘 | 天翼云盘（189） | 内嵌网页登录；refresh_token / SSON 双链路续期 |
+| 云盘 | 百度网盘 | 内嵌网页登录 |
+| 云盘 | 联通沃盘 | 内嵌网页登录 |
+
+> 已暂停支持：123 云盘（v0.9.5 起）、115 网盘（v0.8.0 起）。代码保留，存量账号仍可被识别，但不再展示登录入口。
 
 ## 原理
 
@@ -36,7 +57,7 @@
 小米备份 App
   -> 查询智能存储设备：返回虚拟设备
   -> 连接 DFS 服务：模拟在线和已连接
-  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / GDrive / 139 / 光鸭 / 夸克 / 阿里 / 189 / 百度 / 沃盘 / PC
+  -> DFS AIDL 上传：写入所配置的通道（NAS / 脚本 / 云盘 / PC）
   -> DFS AIDL 下载：从对应云端读取
   -> 进度与完成回调：回传给小米备份原流程
 ```
@@ -45,25 +66,37 @@
 
 ## 功能
 
+### 传输与存储
+
 - 在系统设置中注入「云备份助手」配置入口
 - 拦截 DFS 连接，模拟小米智能存储设备在线状态
-- 支持十二种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、谷歌云端硬盘（Google Drive）、123云盘（v0.9.5 起暂停支持）、天翼云盘（189）、百度网盘、联通沃盘
-- **Google Drive 通道**：不走官方 SDK 也不走内嵌 WebView（Google 拒绝 WebView 内的 OAuth），改用 loopback 授权——本机 `127.0.0.1` 随机端口起一次性回调服务 + 系统浏览器完成登录；scope 用 `drive.file`（只能看到本模块上传的文件），上传走 resumable 分片，删除走回收站（`trashed=true`，30 天后由 Google 自动清理）；支持账号级代理。OAuth 客户端可在构建期内置（见「从源码编译」的 `gdrive.properties`，凭据不入仓库），内置后用户只需点「开始授权」；未内置时回退为「自备 GCP「桌面应用」类型客户端」，登录页给出分步指引。设备需能访问 Google，大陆环境须填账号级代理
-- **备份至 PC**：备份页自动扫描局域网 / USB 发现电脑端 mibackpc（`pc/` 目录），手机弹窗连接 + 电脑端确认配对，免手动填地址；连接成功后备份方式出现「备份至 PC」
-- **USB 通道优先（v1.0.0）**：电脑端在「设备在线但 `adb reverse` 未建立」时自动建通道；手机发现 `127.0.0.1` 应答即把方案切到 USB（仅当电脑名与已配对的一致，避免写到别的机器），拔线自动回落局域网，无需重新配对
-- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/阿里/Google Drive/189/百度/沃盘）可并存，按需切换备份目标
-- 凭据加密存储：密码、Token、Cookie 经 AES-256-GCM 加密落盘，按账号隔离；网盘 Token 自动刷新（光鸭 OAuth2、夸克 __puus 续期、阿里/天翼 refresh_token 轮换、Google OAuth2 refresh_token 等）
-- 大文件在 Cloud 层统一切片上传，十二种协议共用同一套切片逻辑
-- **手机端峰值占用可控（v1.0.0）**：切片前取「在途分片额度」（背压），磁盘分片锁死在 `(并发+2) × chunk_size`（默认 ≤640MB，逐项模式 ≤192MB）；不再整份复制源文件；孤儿分片自动清理（6 小时阈值，不误伤在途分片）
-- **实时上传速率（v1.0.0）**：备份页总进度条右侧显示每秒刷新的速率角标
-- **取消即停（v1.0.0）**：备份页取消后 1~2 秒内停止上传（最多再传完当前一片），且失败/取消一律不删本地源文件
-- **进度口径修正（v1.0.0）**：按宿主自己的分母折算上报，备份项进度不再是「贴住 30% 然后直接跳 100%」
-- 自动清理超出数量限制的旧备份；备份页支持「自动删除本地已上传文件」开关
-- **上传并发与切片集中配置（备份配置页）**：上传线程数（单个文件切片后的并行分片数）、切片大小、备份项并发（同时上传的备份项个数，设为 1 即逐项备份）三项统一在「备份配置」页管理，替代原先散落在 NAS 配置页与备份页的开关
-- Android 11~17 适配：edge-to-edge（含底部导航栏 insets，仅 Android 15+ 强制）、Android 17 本地网络保护（SMB/WebDAV 专项提示）、static final 反射限制审计、配置变更行为兼容
-- Hook 跨版本兼容（HIGH-25）：小米备份类名/混淆方法名漂移时多候选自动降级 + 诊断日志，DFS AIDL transact code 漂移可观测
+- 大文件在 Cloud 层统一切片上传，所有协议共用同一套切片逻辑
+- **上传并发与切片集中配置**：「备份配置」页统一管理三项参数——上传线程数（单个文件切片后的并行分片数）、切片大小、备份项并发（同时上传的备份项个数，设为 1 即逐项备份）
+- **手机端峰值占用可控**：切片前取「在途分片额度」（背压），磁盘分片锁死在 `(并发 + 2) × 切片大小`（默认 ≤640MB，备份项并发为 1 时 ≤192MB）；不整份复制源文件；孤儿分片自动清理（6 小时阈值，不误伤在途分片）
+- **实时上传速率**：备份页总进度条右侧显示每秒刷新的速率角标
+- **取消即停**：取消备份后 1~2 秒内停止上传（最多再传完当前一片）；失败或取消一律不删本地源文件
+- **进度口径修正**：按宿主自己的分母折算上报，备份项进度不再「贴住 30% 后直接跳 100%」
+- 多账号 / 多方案并存：NAS 方案（SMB / WebDAV / 脚本）与云盘账号可同时保存，按需切换备份目标
+- 自动清理超出「最大备份数」的旧备份；可开启「上传完成后自动删除本地备份文件」
+
+### 备份至 PC（mibackpc）
+
+- 备份页自动扫描局域网 / USB 发现电脑端 mibackpc（`pc/` 目录），手机弹窗连接 + 电脑端确认配对，免手动填地址
+- **USB 通道优先**：电脑端在「设备在线但 `adb reverse` 未建立」时自动建通道；手机发现 `127.0.0.1` 有应答即把方案切到 USB（**仅当电脑名与已配对的一致**，避免把备份写到别的机器），拔线后自动回落局域网，无需重新配对
+- 电脑端 PUT 前做磁盘空间预检，空间不足返回 507 并给出可读原因，避免写满接收端后落一堆半截文件
+
+### 界面
+
+- 配置界面按小米 HyperOS 设计语言
+- 底栏支持**悬浮 dock / 贴边**两种样式（设置页切换，即时生效）：悬浮为居中胶囊 dock，带圆角、投影与 85% 半透明表面，API 31+ 下叠加实时背景模糊，系统不支持时自动退化为纯半透明玻璃感
 - 顶部「备份」按钮点击进入智能存储备份页，长按进入备份升级页
-- 自定义 HTTP 脚本通道内置 SSRF 防护与 Rhino JS 沙箱（ClassShutter deny-all + 30s watchdog），WebView 登录关闭文件访问与通用 JS 接口
+
+### 兼容与安全
+
+- 凭据加密存储：密码、Token、Cookie 经 AES-256-GCM 加密落盘，按账号隔离
+- Android 11~17 适配：edge-to-edge（含底部导航栏 insets，仅 Android 15+ 强制）、Android 17 本地网络保护（SMB/WebDAV 专项提示）、static final 反射限制审计、配置变更行为兼容
+- Hook 跨版本兼容（HIGH-25）：小米备份类名 / 混淆方法名漂移时多候选自动降级 + 诊断日志，DFS AIDL transact code 漂移可观测
+- 自定义 HTTP 脚本通道内置 SSRF 防护与 Rhino JS 沙箱（ClassShutter deny-all + 30s watchdog）；WebView 登录关闭文件访问与通用 JS 接口
 
 ## 环境要求
 
@@ -73,36 +106,29 @@
 | Xposed 框架 | LSPosed / LSPatch / EdXposed（Xposed API 82+） |
 | 模块作用域 | 勾选 `com.android.settings` 与 `com.miui.backup` |
 | 备份至 PC | 电脑端 mibackpc.exe（GitHub Release 提供，Go 交叉编译） |
-| Google Drive | 需可访问 Google（大陆环境须在登录页填账号级代理）。OAuth 客户端优先使用内置的（见「从源码编译 → Google Drive 内置 OAuth 客户端」）；未内置的构建需自备 GCP「桌面应用」类型客户端 |
+| Google Drive | 需能访问 Google，大陆环境须在登录页填账号级代理。OAuth 客户端优先使用内置的（见「从源码编译 → Google Drive 内置 OAuth 客户端」）；未内置的构建需自备 GCP「桌面应用」类型客户端 |
 
 > **Android 17 本地网络说明**：SMB/WebDAV 局域网通道的实际网络请求运行在 `com.miui.backup` 宿主进程，
 > 其是否受 Android 17 本地网络保护（ACCESS_LOCAL_NETWORK）影响取决于小米备份 App 自身声明；
 > 模块已声明该权限并在 SMB 连接失败且目标为局域网时给出专项提示（ERR_SMB_LOCALNET）。
 
-> **生效方式**：安装模块并在 LSPosed 勾选作用域后，需**强制停止「小米备份」再重新打开**，宿主才会加载模块代码。配置入口：系统设置 → 云备份助手。
+## 安装与生效
+
+1. 安装 APK，在 Xposed / LSPosed 中启用本模块
+2. 勾选作用域：`com.android.settings` 与 `com.miui.backup`
+3. **强制停止「小米备份」再重新打开**——宿主进程只有重启后才会加载模块代码
+4. 配置入口：系统设置 → 云备份助手
 
 ## 项目结构
 
-模块采用分层架构，自上而下分为 Hook 层、门面层、Provider 抽象层和 Provider 实现层。Hook 层只与门面层 `CloudFileHelp` 交互，不直接接触具体协议实现，保证 Hook 代码稳定、协议可扩展。
+模块采用分层架构，自上而下分为 Hook 层、门面层、Provider 抽象层和协议实现层。Hook 层只与门面层 `CloudFileHelp` 交互，不直接接触具体协议实现，保证 Hook 代码稳定、协议可扩展。
 
-```text
-小米备份 App（宿主）
-   │  DFS AIDL 重定向
-┌──▼──────────────────────────────────────────────────────┐
-│  Hook 层    XposedEntry → AIDLHook / BackupHook          │
-│             / AutoBackupHook / SettingsHook              │
-├─────────────────────────────────────────────────────────┤
-│  门面层    CloudFileHelp：统一 upload/download/list       │
-│            + 切片（背压/取消/分片回收）+ 过期重试          │
-├─────────────────────────────────────────────────────────┤
-│  Provider 层  CloudProvider 接口 + ProviderRegistry       │
-│               AbstractCloudProvider 基类                  │
-├──────────┬──────────┬──────────┬──────────┬─────────────┤
-│ NAS 方案  │ 云盘账号  │ 云盘账号  │ 备份至 PC │ 自定义脚本   │
-│ Smb      │ 139/光鸭  │ 189/百度  │ mibackpc │ Rhino 沙箱  │
-│ WebDAV   │ 夸克/阿里 │ 沃盘/GDrive│ (Go)    │ ScriptProvider│
-└──────────┴──────────┴──────────┴──────────┴─────────────┘
-```
+| 层 | 职责 | 主要类 |
+| --- | --- | --- |
+| Hook 层 | 拦截 DFS AIDL 与宿主 UI / 服务事件 | `XposedEntry`、`AIDLHook`、`BackupHook`、`AutoBackupHook`、`SettingsHook` |
+| 门面层 | 统一 upload / download / list，切片（背压 / 取消 / 分片回收），过期重试 | `CloudFileHelp` |
+| Provider 层 | 协议抽象与活跃目标分发 | `CloudProvider`、`AbstractCloudProvider`、`ProviderRegistry` |
+| 协议实现 | 各通道落地 | `Smb` / `Webdav` / `Script` / `Yun139` / `Guangya` / `Quark` / `AliDrive` / `GoogleDrive` / `Tianyi` / `Baidu` / `Wo` Provider，以及电脑端 `mibackpc` |
 
 ### 双进程注入
 
@@ -184,8 +210,6 @@ gradlew assembleRelease
 - 未提供该文件时注入空串，App 自动回退为「登录页要求用户自填凭据 + 分步指引」
 - 发布版由 CI 从仓库 Secrets（`GDRIVE_CLIENT_ID` / `GDRIVE_CLIENT_SECRET`）注入，见 `.github/workflows/release.yml`
 - **注意**：Google 对「桌面应用」类型的 client_secret 不视为机密，但公开分发意味着任何人都能用这个 client_id 发起授权，消耗的是本项目配额，滥用可能导致 client 被停用（rclone 的共享 client 已宣布 2026 年退役）。建议开启 GCP 用量监控
-
-安装后在 Xposed/LSPosed 中启用模块，勾选作用域 `com.android.settings` 与 `com.miui.backup`，强制停止并重新打开「小米备份」即可生效。
 
 ## 依赖
 
