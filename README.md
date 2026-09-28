@@ -20,9 +20,9 @@
 
 ## 项目介绍
 
-小米手机自带的「小米备份」只能存到小米云或本地。**MiBackup_sly** 是一个 Xposed / LSPosed 模块：通过虚拟小米智能存储设备，把小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、天翼云盘（189）、百度网盘、联通沃盘，实现备份与恢复数据的云端存储——小米备份原本怎么用，现在还怎么用，只是目标变成了你自己的存储。
+小米手机自带的「小米备份」只能存到小米云或本地。**MiBackup_sly** 是一个 Xposed / LSPosed 模块：通过虚拟小米智能存储设备，把小米备份 App 的 DFS 存储流程重定向到自建 SMB、WebDAV、自定义 HTTP 脚本，或内置的谷歌云端硬盘（Google Drive）、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、天翼云盘（189）、百度网盘、联通沃盘，实现备份与恢复数据的云端存储——小米备份原本怎么用，现在还怎么用，只是目标变成了你自己的存储。
 
-本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延伸版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储（AES-256-GCM）、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、天翼云盘（189）、百度网盘、联通沃盘内置 Provider、OAuth2/会话自动刷新、备份至 PC 等能力。
+本项目是 [XPoser\_MiBackup](https://github.com/zgcwkjOpenProject/XPoser_MiBackup) 仓库的延伸版本，在原版 SMB / WebDAV / 自定义 HTTP 脚本三种通道基础上，新增多账号管理、凭据加密存储（AES-256-GCM）、谷歌云端硬盘（Google Drive）、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、天翼云盘（189）、百度网盘、联通沃盘内置 Provider、OAuth2/会话自动刷新、备份至 PC 等能力。
 
 - 源码：https://github.com/suileyan/xpmibackup_sly
 - 下载（签名 APK + 电脑端 mibackpc.exe）：https://github.com/suileyan/xpmibackup_sly/releases
@@ -36,7 +36,7 @@
 小米备份 App
   -> 查询智能存储设备：返回虚拟设备
   -> 连接 DFS 服务：模拟在线和已连接
-  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / 139 / 光鸭 / 夸克 / 阿里 / 189 / 百度 / 沃盘 / PC
+  -> DFS AIDL 上传：写入 SMB / WebDAV / 脚本 / GDrive / 139 / 光鸭 / 夸克 / 阿里 / 189 / 百度 / 沃盘 / PC
   -> DFS AIDL 下载：从对应云端读取
   -> 进度与完成回调：回传给小米备份原流程
 ```
@@ -47,17 +47,19 @@
 
 - 在系统设置中注入「云备份助手」配置入口
 - 拦截 DFS 连接，模拟小米智能存储设备在线状态
-- 支持十一种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、123云盘（v0.9.5 起暂停支持）、天翼云盘（189）、百度网盘、联通沃盘
+- 支持十二种传输通道：SMB/CIFS、WebDAV、自定义 HTTP 脚本、移动云盘（139）、光鸭云盘、夸克云盘、阿里云盘、谷歌云端硬盘（Google Drive）、123云盘（v0.9.5 起暂停支持）、天翼云盘（189）、百度网盘、联通沃盘
+- **Google Drive 通道**：不走官方 SDK 也不走内嵌 WebView（Google 拒绝 WebView 内的 OAuth），改用 loopback 授权——本机 `127.0.0.1` 随机端口起一次性回调服务 + 系统浏览器完成登录；scope 用 `drive.file`（只能看到本模块上传的文件），上传走 resumable 分片，删除走回收站（`trashed=true`，30 天后由 Google 自动清理）；支持账号级代理。OAuth 客户端可在构建期内置（见「从源码编译」的 `gdrive.properties`，凭据不入仓库），内置后用户只需点「开始授权」；未内置时回退为「自备 GCP「桌面应用」类型客户端」，登录页给出分步指引。设备需能访问 Google，大陆环境须填账号级代理
 - **备份至 PC**：备份页自动扫描局域网 / USB 发现电脑端 mibackpc（`pc/` 目录），手机弹窗连接 + 电脑端确认配对，免手动填地址；连接成功后备份方式出现「备份至 PC」
 - **USB 通道优先（v1.0.0）**：电脑端在「设备在线但 `adb reverse` 未建立」时自动建通道；手机发现 `127.0.0.1` 应答即把方案切到 USB（仅当电脑名与已配对的一致，避免写到别的机器），拔线自动回落局域网，无需重新配对
-- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/189/百度/沃盘）可并存，按需切换备份目标
-- 凭据加密存储：密码、Token、Cookie 经 AES-256-GCM 加密落盘，按账号隔离；网盘 Token 自动刷新（光鸭 OAuth2、夸克 __puus 续期、阿里/天翼 refresh_token 轮换等）
-- 大文件在 Cloud 层统一切片上传，十一种协议共用同一套切片逻辑
+- 多账号 / 多方案管理：NAS 方案（SMB/WebDAV/脚本）与云盘账号（139/光鸭/夸克/阿里/Google Drive/189/百度/沃盘）可并存，按需切换备份目标
+- 凭据加密存储：密码、Token、Cookie 经 AES-256-GCM 加密落盘，按账号隔离；网盘 Token 自动刷新（光鸭 OAuth2、夸克 __puus 续期、阿里/天翼 refresh_token 轮换、Google OAuth2 refresh_token 等）
+- 大文件在 Cloud 层统一切片上传，十二种协议共用同一套切片逻辑
 - **手机端峰值占用可控（v1.0.0）**：切片前取「在途分片额度」（背压），磁盘分片锁死在 `(并发+2) × chunk_size`（默认 ≤640MB，逐项模式 ≤192MB）；不再整份复制源文件；孤儿分片自动清理（6 小时阈值，不误伤在途分片）
 - **实时上传速率（v1.0.0）**：备份页总进度条右侧显示每秒刷新的速率角标
 - **取消即停（v1.0.0）**：备份页取消后 1~2 秒内停止上传（最多再传完当前一片），且失败/取消一律不删本地源文件
 - **进度口径修正（v1.0.0）**：按宿主自己的分母折算上报，备份项进度不再是「贴住 30% 然后直接跳 100%」
-- 自动清理超出数量限制的旧备份；备份页支持「自动删除本地已上传文件」「逐项串行备份」开关
+- 自动清理超出数量限制的旧备份；备份页支持「自动删除本地已上传文件」开关
+- **上传并发与切片集中配置（备份配置页）**：上传线程数（单个文件切片后的并行分片数）、切片大小、备份项并发（同时上传的备份项个数，设为 1 即逐项备份）三项统一在「备份配置」页管理，替代原先散落在 NAS 配置页与备份页的开关
 - Android 11~17 适配：edge-to-edge（含底部导航栏 insets，仅 Android 15+ 强制）、Android 17 本地网络保护（SMB/WebDAV 专项提示）、static final 反射限制审计、配置变更行为兼容
 - Hook 跨版本兼容（HIGH-25）：小米备份类名/混淆方法名漂移时多候选自动降级 + 诊断日志，DFS AIDL transact code 漂移可观测
 - 顶部「备份」按钮点击进入智能存储备份页，长按进入备份升级页
@@ -71,6 +73,7 @@
 | Xposed 框架 | LSPosed / LSPatch / EdXposed（Xposed API 82+） |
 | 模块作用域 | 勾选 `com.android.settings` 与 `com.miui.backup` |
 | 备份至 PC | 电脑端 mibackpc.exe（GitHub Release 提供，Go 交叉编译） |
+| Google Drive | 需可访问 Google（大陆环境须在登录页填账号级代理）。OAuth 客户端优先使用内置的（见「从源码编译 → Google Drive 内置 OAuth 客户端」）；未内置的构建需自备 GCP「桌面应用」类型客户端 |
 
 > **Android 17 本地网络说明**：SMB/WebDAV 局域网通道的实际网络请求运行在 `com.miui.backup` 宿主进程，
 > 其是否受 Android 17 本地网络保护（ACCESS_LOCAL_NETWORK）影响取决于小米备份 App 自身声明；
@@ -97,7 +100,7 @@
 ├──────────┬──────────┬──────────┬──────────┬─────────────┤
 │ NAS 方案  │ 云盘账号  │ 云盘账号  │ 备份至 PC │ 自定义脚本   │
 │ Smb      │ 139/光鸭  │ 189/百度  │ mibackpc │ Rhino 沙箱  │
-│ WebDAV   │ 夸克/阿里 │ 沃盘      │ (Go)     │ ScriptProvider│
+│ WebDAV   │ 夸克/阿里 │ 沃盘/GDrive│ (Go)    │ ScriptProvider│
 └──────────┴──────────┴──────────┴──────────┴─────────────┘
 ```
 
@@ -119,8 +122,10 @@ app/src/main/java/com/suileyan/
   cloud/                          云端抽象与账号层
     CloudProvider.java            统一接口
     provider/AbstractCloudProvider  Provider 公共基类
-    provider/                     Smb / Webdav / Yun139 / Guangya / Quark
-                                  / Tianyi / Baidu / Wo Provider（Pan123、Pan115 代码保留）
+    provider/                     Smb / Webdav / Yun139 / Guangya / Quark / Tianyi
+                                  / Baidu / Wo / AliDrive / GoogleDrive Provider
+                                  （Pan123、Pan115 代码保留）
+    login/                        GDriveOAuth / LoopbackAuthServer（Google Drive 授权）
     ProviderRegistry.java         Provider 注册表与活跃目标分发
     ProfileStore / CloudAccountStore / BackupTarget  方案 / 账号 / 目标持久化
     EncryptedCredStore            凭据加密存储（AES-256-GCM + PBKDF2）
@@ -162,6 +167,24 @@ gofmt -l . && go vet ./... && go test ./...
 GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/mibackpc.exe .
 ```
 
+### Google Drive 内置 OAuth 客户端（可选）
+
+Google Drive 通道需要一个 OAuth 客户端。内置进 APK，用户就只需点一下「开始授权」；不内置则每个用户都得自己建 GCP 项目（作者实测首次约需半小时，普通用户基本不会做）。
+
+凭据**不写进源码**，而是构建期从 `src/gdrive.properties` 注入：
+
+```bash
+cd src
+cp gdrive.properties.example gdrive.properties
+# 填入 GCP「桌面应用」类型客户端的 clientId / clientSecret
+gradlew assembleRelease
+```
+
+- `gdrive.properties` 已在 `.gitignore` 中，凭据不会进入 git 历史（与 `keystore.properties` 同款做法）
+- 未提供该文件时注入空串，App 自动回退为「登录页要求用户自填凭据 + 分步指引」
+- 发布版由 CI 从仓库 Secrets（`GDRIVE_CLIENT_ID` / `GDRIVE_CLIENT_SECRET`）注入，见 `.github/workflows/release.yml`
+- **注意**：Google 对「桌面应用」类型的 client_secret 不视为机密，但公开分发意味着任何人都能用这个 client_id 发起授权，消耗的是本项目配额，滥用可能导致 client 被停用（rclone 的共享 client 已宣布 2026 年退役）。建议开启 GCP 用量监控
+
 安装后在 Xposed/LSPosed 中启用模块，勾选作用域 `com.android.settings` 与 `com.miui.backup`，强制停止并重新打开「小米备份」即可生效。
 
 ## 依赖
@@ -170,7 +193,7 @@ GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/mibackpc.exe .
 | --- | --- | --- |
 | [Xposed API](https://api.xposed.info/) | 82 | 框架 Hook 能力 |
 | [smbj](https://github.com/hierynomus/smbj) | 0.13.0 | SMB/CIFS 协议 |
-| [OkHttp](https://square.github.io/okhttp/) | 4.12.0 | HTTP 客户端（WebDAV / 139 / 光鸭 / 夸克 / 189 / 百度 / 沃盘 / 阿里） |
+| [OkHttp](https://square.github.io/okhttp/) | 4.12.0 | HTTP 客户端（WebDAV / 139 / 光鸭 / 夸克 / 189 / 百度 / 沃盘 / 阿里 / Google Drive） |
 | [Rhino](https://github.com/mozilla/rhino) | 1.9.1 | 自定义 HTTP 脚本 JS 运行时（沙箱） |
 | androidx.annotation | 1.6.0 | 仅 `@RequiresApi` 注解（不打包进 APK） |
 

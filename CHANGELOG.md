@@ -2,6 +2,44 @@
 
 本文件记录各版本的主要变更；完整 commit 级明细见 [GitHub Releases](https://github.com/suileyan/xpmibackup_sly/releases)。
 
+## v1.1.0（2026-09-28）· 新增 Google Drive 通道
+
+新增第 12 个传输通道（谷歌云端硬盘）；底栏新增悬浮 dock 样式；上传并发与切片配置收敛；并集中修复首轮真机实测暴露的缺陷。
+
+### Google Drive 通道（新增第 12 个 Provider）
+
+- 新增**谷歌云端硬盘（Google Drive 个人盘）**通道，与既有云盘账号形态对齐：多账号、参与备份/恢复/清理全链路
+- 授权走 **OAuth 2.0 loopback**（RFC 8252）：本机 `127.0.0.1` 随机端口起一次性回调服务 + 系统浏览器完成登录；不用内嵌 WebView（Google 拒绝 WebView 内的 OAuth），不引官方 SDK、不新增运行时依赖
+- scope 用 `drive.file`：只见并只管理本模块上传的文件（规避 restricted scope 审核流程）；代价是恢复列表不含网页端/其他应用上传的文件
+- 上传走 **resumable**（`uploadType=resumable` → Location 会话地址，8MB/片、256KB 对齐、308 续传、断点用 `Content-Range: bytes */total` 查询）；删除走回收站（`trashed=true`，30 天后由 Google 自动清理）
+- 支持**账号级代理**（`proxy_host` / `proxy_port`），大陆网络环境下可用
+- 登录页内置「如何获取 Client ID / Secret」分步指引（含「看到要填包名与签名指纹就是应用类型选错了」的排错提示）
+- **OAuth 客户端开箱即用**：凭据在构建期从 `src/gdrive.properties` 注入（不写进源码、不入 git 历史），CI 从仓库 Secrets 注入发布版；内置后登录页折叠 client 输入区，用户只需点「开始授权」，并保留「使用自己的 OAuth 客户端」覆盖入口；未内置时自动回退为「要求自填 + 分步指引」
+
+### 底栏样式：悬浮 dock / 贴边
+
+- 设置页新增「底栏样式」切换（`nav_bar_style`，默认**悬浮**）：
+  - **悬浮**：居中胶囊 dock（全圆角 + 投影 + 85% 半透明表面），API 31+ 反射调用 `View#setBackgroundBlurRadius` 做实时背景模糊，系统不支持时自动退化为纯半透明玻璃感
+  - **贴边**：MD3 全宽贴底（含顶部 1px 分割线）
+- 切换后即时重放 4 个常驻 Tab 页的底部内容预留，无需重建 Activity；大屏（≥840dp）仍自动切换为侧边导航栏
+
+### 真机实测缺陷修复（Google Drive 首轮验证）
+
+- **修复恢复列表缺项甚至为空**（严重）：Google Drive 上目录被重复创建。
+  根因是两层叠加——`ProviderRegistry.forAccount()` 为读到最新凭据**每次新构造 Provider**，使 `GoogleDriveProvider` 的**实例级**目录缓存完全失效；叠加 `item_threads=3` 时多个上传任务并发执行「查不到就建目录」。Drive 允许同目录重名且服务端不拦（对比阿里云盘用 `check_name_mode=refuse` 有服务端兜底），于是 `MIUI/backup` 被建了 2 份、`20260928_232536` 被建了 3 份，5 个文件散落到不同重名目录，列表只看到其中一个（实测只列出 3 个）。
+  修法：目录缓存改为**静态** `ConcurrentHashMap`（key = 账号 ID + 路径），路径解析**串行**执行并**逐级缓存前缀**，目录被回收后失效对应缓存
+- **修复浏览器回调页显示连接错误**：`LoopbackAuthServer` 用 try-with-resources 包了 `sock.getInputStream()`，关闭 `BufferedReader` 时连带关闭了 socket，导致响应永远写不出去（日志 `回调响应写出失败: Socket is closed`）。授权其实已经成功，但用户看到 `ERR_CONNECTION_TIMED_OUT` 会以为失败。改为使用不关闭底层的流包装，socket 交回 `acceptLoop` 统一关闭
+
+### 上传并发与切片配置收敛
+
+- 新增三项配置并统一到「备份配置」页（原「设备配置」页）：
+  - **上传线程数（切片并发）**：单个文件切片后的并行上传分片数（1–64，默认 8）——原先硬编码为 8，现可调
+  - **切片大小**：分片阈值（MB，0 表示不切片，默认 64）——从 NAS 配置页迁入
+  - **备份项并发**：同时上传的备份项个数（1–16，默认 3）——接管原「上传线程数」的项级并发语义
+- 移除备份页「逐项备份」勾选项，功能由「备份项并发 = 1」等价替代；旧配置自动兼容（`serial_upload=on` → 1，否则沿用 `upload_threads`），保存时清理旧键
+- 移除 NAS 配置页中的「上传线程数」「切片大小」输入框——它们只回显、从不落盘（`saveProfile()` 不写 `config.ini`），改完点保存不生效
+- 「设备配置」标签页更名为「备份配置」；移除设备名称、设备描述两个输入框（不参与备份链路判定，`device_name` 配置键保留供宿主上报设备名）
+
 ## v1.0.0（2026-09-22）· 首个正式版
 
 从 v0.9.5 起累计 15 个提交 + 本轮集中修复，覆盖「备份至 PC」全链路打通、手机端峰值占用、进度可视化与四家云盘的实测缺陷。
