@@ -78,18 +78,17 @@ public class AIDLHook {
     /**
      * 获取上传线程池，允许通过配置控制并发上传数量。
      * 双重检查锁定：避免 check-then-act 竞态导致线程池泄漏（CRIT-05）。
-     * 当「串行上传」开关（serial_upload=on）开启时，线程池被钳到 1，
-     * 宿主按「一项 100% 完成才下一项」推进；否则沿用 upload_threads 值。
+     * 线程数取「备份项并发」（{@code item_threads}，默认 3），即同时上传的备份项个数；
+     * 设为 1 时宿主按「一项 100% 完成才下一项」推进（原「逐项备份」开关的功能）。
      *
-     * 注意：LSPosed 注入后，备份运行中用户也可能改勾选。若池已存在且目标线程数
-     * 与现池不符（例如刚勾上 serial_upload 把 3 池变 1 池），重建池——
-     * 旧池里已提交的任务自然跑完，新任务进新池。
+     * 注意：LSPosed 注入后，备份运行中用户也可能改配置。若池已存在且目标线程数
+     * 与现池不符（例如把 3 改成 1），重建池——旧池里已提交的任务自然跑完，新任务进新池。
      */
     private static ExecutorService getUploadExecutor() {
         var target = targetUploadThreads();
         var e = uploadExecutor;
         if (e != null && !e.isShutdown()) {
-            // 开关被实时切换：目标线程数变化则重建（FixedThreadPool 池大小不变，只能重建）
+            // 配置被实时修改：目标线程数变化则重建（FixedThreadPool 池大小不变，只能重建）
             if (target == eTargetThreads.get()) {
                 return e;
             }
@@ -118,11 +117,9 @@ public class AIDLHook {
         }
     }
 
-    /** 目标上传线程数：serial_upload=on 钳到 1，否则读 upload_threads */
+    /** 目标上传线程数：读「备份项并发」（item_threads，默认 3）；兼容旧键 serial_upload/upload_threads */
     private static int targetUploadThreads() {
-        return "on".equals(com.suileyan.comm.ConfigHelp.getString("serial_upload", "off"))
-                ? 1
-                : Math.max(1, com.suileyan.comm.ConfigHelp.getInt("upload_threads", 3));
+        return com.suileyan.comm.ConfigHelp.itemThreads();
     }
 
     /** 当前池对应的目标线程数（重建时比较用；池本身不暴露大小） */

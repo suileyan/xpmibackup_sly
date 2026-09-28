@@ -317,6 +317,44 @@ public class ConfigHelp {
     }
 
     /**
+     * 备份项并发：同时上传的备份项个数（宿主上传线程池大小）。
+     *
+     * 新键 {@code item_threads} 优先；旧配置兼容——旧「逐项备份」开关
+     * {@code serial_upload=on} 等价于 1，否则沿用旧键 {@code upload_threads}
+     * （该键历史语义就是项级并发，此处直接继承其值，避免升级后并发数跳变）。
+     * 默认 3，钳到 [1, 16]。
+     */
+    public static int itemThreads() {
+        var cfg = load();
+        var v = parseIntOr(cfg.optString("item_threads", ""), -1);
+        if (v < 0) {
+            if ("on".equals(cfg.optString("serial_upload", "off"))) {
+                v = 1;
+            } else {
+                v = parseIntOr(cfg.optString("upload_threads", ""), 3);
+            }
+        }
+        return Math.min(16, Math.max(1, v));
+    }
+
+    /**
+     * 上传线程数（切片并发）：单个文件切片后并行上传的分片数。
+     * 与 {@link #itemThreads()}（项级）相互独立。默认 8，钳到 [1, 64]。
+     */
+    public static int chunkThreads() {
+        return Math.min(64, Math.max(1, getInt("chunk_threads", 8)));
+    }
+
+    /** 宽松解析整数：解析失败返回调用方给的默认值 */
+    private static int parseIntOr(String text, int def) {
+        try {
+            return Integer.parseInt(text == null ? "" : text.trim());
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    /**
      * 默认配置值
      */
     private static LinkedHashMap<String, String> defaultMap() {
@@ -328,10 +366,12 @@ public class ConfigHelp {
         map.put("backup_max", "5");
         map.put("log_enabled", "true");
         map.put("protocol", "smb");
-        map.put("upload_threads", "3");
+        // 上传线程数（切片并发）：单个文件切片后并行上传的分片数
+        map.put("chunk_threads", "8");
         map.put("chunk_size_mb", "64");
         map.put("auto_delete_local", "off");
-        map.put("serial_upload", "off");
+        // 备份项并发（item_threads）刻意不放进默认表：它需要兼容旧键
+        // （serial_upload=on → 1、upload_threads 回退），由 itemThreads() 统一解析
         map.put("smb_server", "192.168.68.1");
         map.put("smb_port", "445");
         map.put("smb_share", isChineseLocale() ? "备份数据" : "BackupData");

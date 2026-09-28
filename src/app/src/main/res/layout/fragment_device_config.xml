@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 设备配置页：分组卡片 + 8pt 栅格间距；页面标题由顶栏统一承担 -->
+<!-- 备份配置页：分组卡片 + 8pt 栅格间距；页面标题由顶栏统一承担 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -15,7 +15,7 @@
         android:paddingTop="@dimen/page_padding_top"
         android:paddingBottom="@dimen/page_padding_bottom">
 
-        <!-- 设备信息 -->
+        <!-- 备份参数 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -29,37 +29,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="@dimen/space_12"
-                android:text="@string/device_info_section" />
-
-            <TextView
-                style="@style/XmTextLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="@dimen/label_gap"
-                android:text="@string/device_name" />
-
-            <EditText
-                android:id="@+id/et_device_name"
-                style="@style/XmInput"
-                android:hint="@string/device_name_hint"
-                android:imeOptions="actionNext"
-                android:inputType="text"
-                android:layout_marginBottom="@dimen/field_gap" />
-
-            <TextView
-                style="@style/XmTextLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="@dimen/label_gap"
-                android:text="@string/device_description" />
-
-            <EditText
-                android:id="@+id/et_device_describe"
-                style="@style/XmInput"
-                android:hint="@string/device_description_hint"
-                android:imeOptions="actionNext"
-                android:inputType="text"
-                android:layout_marginBottom="@dimen/field_gap" />
+                android:text="@string/backup_section_basic" />
 
             <TextView
                 style="@style/XmTextLabel"
@@ -101,6 +71,88 @@
                 android:id="@+id/et_backup_max"
                 style="@style/XmInput"
                 android:hint="5"
+                android:imeOptions="actionDone"
+                android:inputType="number" />
+        </LinearLayout>
+
+        <!-- 上传与切片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card"
+            android:padding="@dimen/card_padding"
+            android:layout_marginBottom="@dimen/card_gap">
+
+            <TextView
+                style="@style/XmTextSection"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/space_12"
+                android:text="@string/backup_section_upload" />
+
+            <TextView
+                style="@style/XmTextLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/label_gap"
+                android:text="@string/upload_threads" />
+
+            <TextView
+                style="@style/XmTextCaption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/space_8"
+                android:text="@string/desc_upload_threads" />
+
+            <EditText
+                android:id="@+id/et_chunk_threads"
+                style="@style/XmInput"
+                android:hint="8"
+                android:imeOptions="actionNext"
+                android:inputType="number"
+                android:layout_marginBottom="@dimen/field_gap" />
+
+            <TextView
+                style="@style/XmTextLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/label_gap"
+                android:text="@string/chunk_size_mb" />
+
+            <TextView
+                style="@style/XmTextCaption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/space_8"
+                android:text="@string/desc_chunk_size" />
+
+            <EditText
+                android:id="@+id/et_chunk_size_mb"
+                style="@style/XmInput"
+                android:hint="64"
+                android:imeOptions="actionNext"
+                android:inputType="number"
+                android:layout_marginBottom="@dimen/field_gap" />
+
+            <TextView
+                style="@style/XmTextLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/label_gap"
+                android:text="@string/item_threads" />
+
+            <TextView
+                style="@style/XmTextCaption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/space_8"
+                android:text="@string/desc_item_threads" />
+
+            <EditText
+                android:id="@+id/et_item_threads"
+                style="@style/XmInput"
+                android:hint="3"
                 android:imeOptions="actionDone"
                 android:inputType="number" />
         </LinearLayout>

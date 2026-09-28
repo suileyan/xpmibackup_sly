@@ -424,11 +424,10 @@ public class CloudFileHelp {
         var buffer = new byte[BUFFER_SIZE];
         var totalWritten = 0L;
 
-        // 分片并行上传（默认 8 线程；serial_upload=on 时钳到 1，分片也串行，宿主才能逐项 100% 推进）。
+        // 分片并行上传：读「上传线程数」（chunk_threads，默认 8）。这是单文件内的片级并发，
+        // 与「备份项并发」（item_threads，项级，见 AIDLHook）相互独立。
         // 沃盘等云盘对单请求限速（实测沃盘上传域当前 ~70KB/s 总吞吐，5 连接共享；并发提到 8 试每连接限速的剩余空间）
-        var partThreads = "on".equals(com.suileyan.comm.ConfigHelp.getString("serial_upload", "off"))
-                ? 1
-                : 8;
+        var partThreads = com.suileyan.comm.ConfigHelp.chunkThreads();
         // 背压：在途分片（已切好、尚未传完）最多 partThreads + 2 片。
         // 原实现把线程池的无界队列当缓冲，而切分只是本地盘读写（数百 MB/s）、上传要过网络（几十 MB/s），
         // 于是 8.75GB 的项会在几十秒内被整份切成 140 片堆在盘上等上传 —— 手机端峰值占用凭空多出整整一份文件。

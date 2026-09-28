@@ -17,27 +17,41 @@ import com.suileyan.xpmibackup.R;
 import com.suileyan.comm.LogHelp;
 
 /**
- * 设备配置界面
- * 管理设备名称、备份路径、最大备份数、设置页面描述文字的读写
+ * 备份配置界面（原「设备配置」）
+ * 管理备份路径、最大备份数、上传线程数（切片并发）、切片大小、备份项并发与日志开关。
+ *
+ * 设备名称 / 设备描述输入已移除：两者不参与备份链路的任何判定，
+ * 其中 device_name 仅作为宿主 DFS 上报的设备名，保留配置键与默认值即可。
  */
 public class DeviceConfigFragment extends Fragment {
 
     private static final String TAG = "XpMiBackup";
-    private EditText etDeviceName, etBackupPath, etMaxBackups, etSettingsSummary;
+
+    /** 并发/切片配置的合法上限：与 ConfigHelp 的钳制保持一致，避免保存后被静默截断 */
+    private static final int MAX_CHUNK_THREADS = 64;
+    private static final int MAX_ITEM_THREADS = 16;
+    private static final int MAX_CHUNK_SIZE_MB = 1024;
+
+    private EditText etBackupPath, etMaxBackups, etChunkThreads, etChunkSizeMb, etItemThreads;
     private Switch swLogEnabled;
 
     /**
-     * 创建设备配置界面视图
+     * 创建备份配置界面视图
      * 绑定输入框控件，加载已有配置，注册保存按钮点击事件
      */
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         var t0 = System.currentTimeMillis();
         var view = inflater.inflate(R.layout.fragment_device_config, container, false);
-        etDeviceName = view.findViewById(R.id.et_device_name);
-        etSettingsSummary = view.findViewById(R.id.et_device_describe);
+        // 底部预留：内容穿过悬浮底栏背后（clipToPadding=false），滚到底时最后一项滚出遮挡范围
+        if (getActivity() instanceof com.suileyan.xpmibackup.MainActivity main) {
+            com.suileyan.xpmibackup.MainActivity.applyBottomClearance(view, main.getBottomContentPadding());
+        }
         etBackupPath = view.findViewById(R.id.et_backup_path);
         etMaxBackups = view.findViewById(R.id.et_backup_max);
+        etChunkThreads = view.findViewById(R.id.et_chunk_threads);
+        etChunkSizeMb = view.findViewById(R.id.et_chunk_size_mb);
+        etItemThreads = view.findViewById(R.id.et_item_threads);
         swLogEnabled = view.findViewById(R.id.sw_log_enabled);
         var btnSave = view.findViewById(R.id.btn_save);
 
@@ -69,79 +83,71 @@ public class DeviceConfigFragment extends Fragment {
      * 从配置文件读取所有配置项，填充到输入框
      */
     private void loadConfig() {
-        // 读取配置
         var cfg = com.suileyan.comm.ConfigHelp.load();
-        // 显示到页面
-        etDeviceName.setText(cfg.optString("device_name", ""));
-        etSettingsSummary.setText(cfg.optString("device_describe", ""));
         etBackupPath.setText(cfg.optString("backup_path", ""));
         etMaxBackups.setText(cfg.optString("backup_max", "5"));
+        etChunkThreads.setText(cfg.optString("chunk_threads", "8"));
+        etChunkSizeMb.setText(cfg.optString("chunk_size_mb", "64"));
+        // 备份项并发走 ConfigHelp.itemThreads()：兼顾旧键 serial_upload（逐项备份）/ upload_threads
+        etItemThreads.setText(String.valueOf(com.suileyan.comm.ConfigHelp.itemThreads()));
         swLogEnabled.setChecked(!cfg.has("log_enabled") || "true".equalsIgnoreCase(cfg.optString("log_enabled", "true")));
     }
 
     /**
      * 将输入框内容保存到配置文件
-     * 增加输入校验（LOW-45）：备份路径非空、最大备份数为合法数字
+     * 校验（LOW-45）：备份路径非空、最大备份数为非负整数、三个并发/切片项在合法区间内
      *
      * @return 是否保存成功（校验失败或 IO 异常返回 false）
      */
     private boolean saveConfig() {
         try {
             var cfg = com.suileyan.comm.ConfigHelp.load();
-            var name = etDeviceName.getText().toString().trim();
-            var describe = etSettingsSummary.getText().toString().trim();
             var path = etBackupPath.getText().toString().trim();
-            var count = etMaxBackups.getText().toString().trim();
-
-            if (name.isEmpty()) {
-                Toast.makeText(getActivity(), R.string.toast_device_name_required, Toast.LENGTH_SHORT).show();
-                return false;
-            }
             if (path.isEmpty()) {
                 Toast.makeText(getActivity(), R.string.toast_backup_path_required, Toast.LENGTH_SHORT).show();
                 return false;
             }
-            var maxBackups = 5;
-            try {
-                maxBackups = Integer.parseInt(count);
-                if (maxBackups < 0) throw new NumberFormatException("negative");
-            } catch (NumberFormatException e) {
-                Toast.makeText(getActivity(), R.string.toast_backup_max_invalid, Toast.LENGTH_SHORT).show();
-                return false;
-            }
+            var maxBackups = parseRange(etMaxBackups, 0, Integer.MAX_VALUE, R.string.toast_backup_max_invalid);
+            if (maxBackups < 0) return false;
+            var chunkThreads = parseRange(etChunkThreads, 1, MAX_CHUNK_THREADS, R.string.toast_chunk_threads_invalid);
+            if (chunkThreads < 0) return false;
+            var chunkSizeMb = parseRange(etChunkSizeMb, 0, MAX_CHUNK_SIZE_MB, R.string.toast_chunk_size_invalid);
+            if (chunkSizeMb < 0) return false;
+            var itemThreads = parseRange(etItemThreads, 1, MAX_ITEM_THREADS, R.string.toast_item_threads_invalid);
+            if (itemThreads < 0) return false;
 
-            cfg.put("device_id", generateDeviceId(name));
-            cfg.put("device_name", name);
-            cfg.put("device_describe", describe);
             cfg.put("backup_path", path);
             cfg.put("backup_max", String.valueOf(maxBackups));
+            cfg.put("chunk_threads", String.valueOf(chunkThreads));
+            cfg.put("chunk_size_mb", String.valueOf(chunkSizeMb));
+            cfg.put("item_threads", String.valueOf(itemThreads));
             cfg.put("log_enabled", swLogEnabled.isChecked() ? "true" : "false");
+            // 旧并发键已被 item_threads 取代：保存时一并清掉，避免新旧两套键长期并存
+            cfg.remove("upload_threads");
+            cfg.remove("serial_upload");
+            // 设备ID 不再由界面维护：保留已有值，缺失时兜底（备份前置校验要求非空）
+            if (cfg.optString("device_id", "").trim().isEmpty()) {
+                cfg.put("device_id", "miback");
+            }
             com.suileyan.comm.ConfigHelp.save(cfg);
             return true;
         } catch (Exception e) {
-            LogHelp.e(TAG, "save device config failed: " + e.getMessage(), e);
+            LogHelp.e(TAG, "save backup config failed: " + e.getMessage(), e);
             return false;
         }
     }
 
     /**
-     * 生成设备ID：对设备名称取MD5后取前6位
-     * 空名称回退为固定前缀+时间戳，避免所有空名设备生成相同 ID（LOW-44）
+     * 解析并校验 [min, max] 区间内的整数；非法或越界时弹出对应提示并返回 -1
      */
-    private String generateDeviceId(String name) {
+    private int parseRange(EditText field, int min, int max, int errRes) {
         try {
-            if (name == null || name.isEmpty()) {
-                name = "miback-" + System.currentTimeMillis();
-            }
-            var md = java.security.MessageDigest.getInstance("MD5");
-            var hash = md.digest(name.getBytes("UTF-8"));
-            var sb = new StringBuilder();
-            for (var i = 0; i < 3; i++) {
-                sb.append(String.format("%02x", hash[i]));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            return name;
+            var v = Integer.parseInt(field.getText().toString().trim());
+            if (v < min || v > max) throw new NumberFormatException("out of range");
+            return v;
+        } catch (NumberFormatException e) {
+            Toast.makeText(getActivity(), errRes, Toast.LENGTH_SHORT).show();
+            return -1;
         }
     }
 

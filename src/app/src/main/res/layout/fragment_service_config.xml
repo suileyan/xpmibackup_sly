@@ -144,59 +144,6 @@
                 </RadioGroup>
             </LinearLayout>
 
-            <!-- 全局设置卡片 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:background="@drawable/bg_card"
-                android:padding="@dimen/card_padding"
-                android:layout_marginBottom="@dimen/card_gap">
-
-                <TextView
-                    style="@style/XmTextLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="@dimen/label_gap"
-                    android:text="@string/upload_threads" />
-
-                <TextView
-                    style="@style/XmTextCaption"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="@dimen/space_8"
-                    android:text="@string/desc_upload_threads" />
-
-                <EditText
-                    android:id="@+id/et_upload_threads"
-                    style="@style/XmInput"
-                    android:hint="3"
-                    android:imeOptions="actionNext"
-                    android:inputType="number"
-                    android:layout_marginBottom="@dimen/field_gap" />
-
-                <TextView
-                    style="@style/XmTextLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="@dimen/label_gap"
-                    android:text="@string/chunk_size_mb" />
-
-                <TextView
-                    style="@style/XmTextCaption"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="@dimen/space_8"
-                    android:text="@string/desc_chunk_size" />
-
-                <EditText
-                    android:id="@+id/et_chunk_size_mb"
-                    style="@style/XmInput"
-                    android:hint="64"
-                    android:imeOptions="actionNext"
-                    android:inputType="number" />
-            </LinearLayout>
-
             <!-- 协议参数卡片（面板随协议切换） -->
             <LinearLayout
                 android:layout_width="match_parent"

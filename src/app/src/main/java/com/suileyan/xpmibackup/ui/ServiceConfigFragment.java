@@ -60,7 +60,6 @@ public class ServiceConfigFragment extends Fragment {
     private LinearLayout containerScriptVars;
     private TextView tvScriptVarsTitle, tvScriptVarsHint;
     private TextView tvScriptHelp;
-    private EditText etUploadThreads, etChunkSizeMb;
     private EditText etSmbServer, etSmbPort, etSmbShare, etSmbUser, etSmbPass;
     private EditText etWebdavUrl, etWebdavUser, etWebdavPass;
     private EditText etCustomScript;
@@ -79,6 +78,10 @@ public class ServiceConfigFragment extends Fragment {
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         var t0 = System.currentTimeMillis();
         var view = inflater.inflate(R.layout.fragment_service_config, container, false);
+        // 底部预留：内容穿过悬浮底栏背后（clipToPadding=false），滚到底时最后一项滚出遮挡范围
+        if (getActivity() instanceof com.suileyan.xpmibackup.MainActivity main) {
+            com.suileyan.xpmibackup.MainActivity.applyBottomClearance(view, main.getBottomContentPadding());
+        }
 
         profileSpinner = view.findViewById(R.id.profile_spinner);
         etProfileName = view.findViewById(R.id.et_profile_name);
@@ -97,8 +100,6 @@ public class ServiceConfigFragment extends Fragment {
         tvScriptVarsHint = view.findViewById(R.id.tv_script_vars_hint);
         tvScriptHelp = view.findViewById(R.id.tv_script_help);
         tvScriptHelp.setPaintFlags(tvScriptHelp.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
-        etUploadThreads = view.findViewById(R.id.et_upload_threads);
-        etChunkSizeMb = view.findViewById(R.id.et_chunk_size_mb);
         etSmbServer = view.findViewById(R.id.et_smb_server);
         etSmbPort = view.findViewById(R.id.et_smb_port);
         etSmbShare = view.findViewById(R.id.et_smb_share);
@@ -171,11 +172,6 @@ public class ServiceConfigFragment extends Fragment {
      */
     private void loadConfig() {
         profiles = ProfileStore.list();
-
-        // 全局配置
-        var cfg = com.suileyan.comm.ConfigHelp.load();
-        etUploadThreads.setText(cfg.optString("upload_threads", "3"));
-        etChunkSizeMb.setText(cfg.optString("chunk_size_mb", "64"));
 
         var active = ProfileStore.getActive();
         if (active != null) {

@@ -58,7 +58,6 @@ public class BackupFragment extends Fragment {
     private Button btnStartBackup;
     private android.widget.CheckBox cbRootModules;
     private android.widget.CheckBox cbAutoDeleteLocal;
-    private android.widget.CheckBox cbSerialUpload;
 
     private List<Profile> profiles = new ArrayList<>();
     private List<CloudAccount> cloudAccounts = new ArrayList<>();
@@ -80,6 +79,10 @@ public class BackupFragment extends Fragment {
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         var t0 = System.currentTimeMillis();
         var view = inflater.inflate(R.layout.fragment_backup, container, false);
+        // 底部预留：内容穿过悬浮底栏背后（clipToPadding=false），滚到底时最后一项滚出遮挡范围
+        if (getActivity() instanceof com.suileyan.xpmibackup.MainActivity main) {
+            com.suileyan.xpmibackup.MainActivity.applyBottomClearance(view, main.getBottomContentPadding());
+        }
 
         rgBackupMethod = view.findViewById(R.id.rg_backup_method);
         rbNas = view.findViewById(R.id.rb_nas);
@@ -148,10 +151,6 @@ public class BackupFragment extends Fragment {
         cbAutoDeleteLocal.setChecked("on".equals(ConfigHelp.getString("auto_delete_local", "off")));
         cbAutoDeleteLocal.setOnCheckedChangeListener((b, isChecked) -> saveAutoDeleteToggle(isChecked));
 
-        // 逐项备份（一项 100% 后再下一项，而非多项并行 30% 补全）
-        cbSerialUpload = view.findViewById(R.id.cb_serial_upload);
-        cbSerialUpload.setChecked("on".equals(ConfigHelp.getString("serial_upload", "off")));
-        cbSerialUpload.setOnCheckedChangeListener((b, isChecked) -> saveSerialUploadToggle(isChecked));
         com.suileyan.comm.LogHelp.i("XpMiBackup", "STARTUP BackupFragment onCreateView: " + (System.currentTimeMillis() - t0) + "ms");
         return view;
     }
@@ -646,17 +645,6 @@ public class BackupFragment extends Fragment {
             ConfigHelp.save(cfg);
         } catch (Exception e) {
             com.suileyan.comm.LogHelp.w("XpMiBackup", "save auto delete toggle failed", e);
-        }
-    }
-
-    /** 保存「逐项备份」开关（serial_upload=on 时上传线程池钳到 1，宿主按一项 100% 推进） */
-    private void saveSerialUploadToggle(boolean on) {
-        try {
-            var cfg = ConfigHelp.load();
-            cfg.put("serial_upload", on ? "on" : "off");
-            ConfigHelp.save(cfg);
-        } catch (Exception e) {
-            com.suileyan.comm.LogHelp.w("XpMiBackup", "save serial upload toggle failed", e);
         }
     }
 
