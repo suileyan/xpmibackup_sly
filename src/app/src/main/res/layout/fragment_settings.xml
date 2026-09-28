@@ -74,6 +74,40 @@
                 </RadioGroup>
             </LinearLayout>
 
+            <!-- 底栏样式卡片：悬浮 / 贴边切换，保存后即时生效 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card"
+                android:padding="@dimen/card_padding"
+                android:layout_marginBottom="@dimen/card_gap">
+
+                <TextView
+                    style="@style/XmTextSection"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/space_4"
+                    android:text="@string/nav_bar_style" />
+
+                <RadioGroup
+                    android:id="@+id/rg_nav_style"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <RadioButton
+                        android:id="@+id/rb_nav_floating"
+                        style="@style/XmRadio"
+                        android:text="@string/nav_style_floating" />
+
+                    <RadioButton
+                        android:id="@+id/rb_nav_fixed"
+                        style="@style/XmRadio"
+                        android:text="@string/nav_style_fixed" />
+                </RadioGroup>
+            </LinearLayout>
+
             <!-- 交互与更新卡片 -->
             <LinearLayout
                 android:layout_width="match_parent"

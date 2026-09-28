@@ -20,7 +20,7 @@ import com.suileyan.comm.UpdateChecker;
 
 /**
  * 云备份助手主界面
- * 底部Tab切换：设备配置 / NAS / 云盘 / 备份
+ * 底部Tab切换：备份配置 / NAS / 云盘 / 备份
  * 采用"桌面滑动"式布局：4 个 Tab 页面常驻同一容器横向排开，
  * 切换时整体平移（中间 Tab 可见，像桌面翻页）；二级页面（云盘登录流程）用 overlay 容器压层
  * 通过Xposed Hook注入到小米设置"小米澎湃AI"下方，点击跳转至此
@@ -60,6 +60,8 @@ public class MainActivity extends Activity {
     private int navBottomInset = 0;
     /** 大屏横屏：底部导航条切换为侧边导航栏 */
     private boolean railMode = false;
+    /** 底栏样式：悬浮（脱离屏幕边缘、圆角+投影，默认）/ 贴边（MD3 全宽贴底），config.ini nav_bar_style */
+    private boolean navBarFloating = true;
 
     private android.widget.FrameLayout tabContainer;
     private android.widget.FrameLayout overlayContainer;
@@ -105,6 +107,9 @@ public class MainActivity extends Activity {
         }
         setContentView(R.layout.activity_main);
         com.suileyan.comm.LogHelp.i("XpMiBackup", "STARTUP setContentView done: " + (System.currentTimeMillis() - startupT0) + "ms");
+
+        // 底栏样式（悬浮 / 贴边）：设置页可切换，config.ini 持久化，默认悬浮
+        navBarFloating = !"fixed".equals(com.suileyan.comm.ConfigHelp.getString("nav_bar_style", "floating"));
 
         tvTopTitle = findViewById(R.id.tv_top_title);
         floatingBar = findViewById(R.id.tab_bar_container);
@@ -419,6 +424,17 @@ public class MainActivity extends Activity {
         themeTransition = true;
     }
 
+    /**
+     * 设置页切换底栏样式后即时生效（无需重建 Activity）：
+     * 重读 config.ini nav_bar_style 并重放响应式布局（applyRailLayout → styleBottomBar → applyClearance），
+     * 内容区底部留白、底栏圆角/投影/留白同步切换
+     */
+    public void onNavBarStyleChanged() {
+        navBarFloating = !"fixed".equals(com.suileyan.comm.ConfigHelp.getString("nav_bar_style", "floating"));
+        applyResponsiveLayout();
+        applyTabContentBottomPadding();
+    }
+
     /** 保存 Tab 位置与主题过渡标志，主题切换重建后恢复 */
     @Override
     protected void onSaveInstanceState(Bundle outState) {
@@ -466,6 +482,7 @@ public class MainActivity extends Activity {
             column.setOnApplyWindowInsetsListener((v, insets) -> {
                 navBottomInset = insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom;
                 applyClearance();
+                applyTabContentBottomPadding();
                 return insets;
             });
             column.requestApplyInsets();
@@ -473,38 +490,92 @@ public class MainActivity extends Activity {
             com.suileyan.comm.LogHelp.w("XpMiBackup", "apply edge-to-edge insets failed", e);
         }
         applyClearance();
+        applyTabContentBottomPadding();
     }
 
     /**
      * 统一维护「内容让位」尺寸：
-     * · 手机/竖屏——底栏悬浮于底部，内容区底部留白 = 96dp + 导航栏 inset（底栏自身底部外边距同步抬升）
-     * · 大屏横屏——底栏变侧边导航栏，底部留白归零，改为内容区左侧留白
-     * · overlay 二级页面打开（底栏收起）——留白全部归零，二级页面铺满内容区
+     * · 手机/竖屏——内容区不再整块让位（bottomSpacer 恒为 0）：内容可从悬浮 dock 背后穿过，
+     *   遮挡只发生在 dock 本体 footprint 上；滚动到底时的露出由各 Tab 页 ScrollView 的
+     *   底部 padding（getBottomContentPadding）负责，而非容器整块留白
+     * · 大屏横屏——底栏变侧边导航栏，内容区左侧留白
+     * · overlay 二级页面打开（底栏收起）——二级页面铺满内容区
      */
     private void applyClearance() {
         if (bottomSpacer == null || navRailSpacer == null) return;
-        var bottom = 0;
         var start = 0;
-        if (barVisible) {
-            if (railMode) {
-                start = getResources().getDimensionPixelSize(R.dimen.nav_rail_clearance);
-            } else {
-                bottom = getResources().getDimensionPixelSize(R.dimen.floating_bar_clearance) + navBottomInset;
-            }
+        if (barVisible && railMode) {
+            start = getResources().getDimensionPixelSize(R.dimen.nav_rail_clearance);
         }
-        setViewHeight(bottomSpacer, bottom);
+        setViewHeight(bottomSpacer, 0);
         setViewWidth(navRailSpacer, start);
 
         if (floatingBar != null && !railMode) {
             var lp = floatingBar.getLayoutParams();
             if (lp instanceof android.view.ViewGroup.MarginLayoutParams mlp) {
-                var target = getResources().getDimensionPixelSize(R.dimen.floating_bar_margin_bottom) + navBottomInset;
+                var target = (navBarFloating
+                        ? getResources().getDimensionPixelSize(R.dimen.floating_bar_margin_bottom) : 0)
+                        + navBottomInset;
                 if (mlp.bottomMargin != target) {
                     mlp.bottomMargin = target;
                     floatingBar.setLayoutParams(mlp);
                 }
             }
         }
+    }
+
+    /**
+     * Tab 页滚动内容底部预留 = 底栏遮挡范围 + 导航栏 inset：
+     * · 悬浮 dock——100dp（dock 64 + 底部留白 16 + 呼吸空隙 20），内容穿过 dock 背后，
+     *   滚动到底时最后一项完整滚出 dock 遮挡范围
+     * · 贴边——80dp（全宽栏本体高度）
+     * · 侧边导航栏（railMode）——底部无遮挡，预留 0
+     * 由 4 个常驻 Tab Fragment 在 onCreateView 自查，样式切换 / insets 派发时由
+     * applyTabContentBottomPadding() 统一刷新。
+     */
+    public int getBottomContentPadding() {
+        if (railMode) return 0;
+        return getResources().getDimensionPixelSize(navBarFloating
+                ? R.dimen.floating_bar_clearance : R.dimen.nav_bar_clearance) + navBottomInset;
+    }
+
+    /** 刷新 4 个常驻 Tab 页滚动容器的底部预留（Tab 页只 inflate 一次，样式切换后需重放） */
+    private void applyTabContentBottomPadding() {
+        if (!tabsReady) return;
+        var fm = getFragmentManager();
+        for (var i = 0; i < TAB_COUNT; i++) {
+            var f = fm.findFragmentByTag("tab-" + TAB_NAMES[i]);
+            var v = f == null ? null : f.getView();
+            if (v == null) continue;
+            applyBottomClearance(v, getBottomContentPadding());
+        }
+    }
+
+    /**
+     * 把底栏遮挡预留应用到 Fragment 的滚动容器：
+     * · paddingBottom = 遮挡范围——滚动到底时最后一项完整滚出 dock 遮挡
+     * · clipToPadding = false——ScrollView 默认裁剪到 padding 内沿，不关掉的话内容
+     *   永远被裁在 dock 顶（等价于整块让位，穿透失效）；关掉后内容可画进 padding 区，
+     *   从 dock 背后穿过，只有 dock 本体遮挡
+     * root 不是 ScrollView 时（如云盘账号页）取第一个 ScrollView 后代。
+     */
+    public static void applyBottomClearance(View root, int pad) {
+        var sv = findScrollView(root);
+        if (sv == null) return;
+        sv.setPadding(sv.getPaddingLeft(), sv.getPaddingTop(), sv.getPaddingRight(), pad);
+        sv.setClipToPadding(false);
+    }
+
+    /** 深度优先找第一个 ScrollView 后代（含自身） */
+    private static android.widget.ScrollView findScrollView(View v) {
+        if (v instanceof android.widget.ScrollView sv) return sv;
+        if (v instanceof android.view.ViewGroup vg) {
+            for (var i = 0; i < vg.getChildCount(); i++) {
+                var r = findScrollView(vg.getChildAt(i));
+                if (r != null) return r;
+            }
+        }
+        return null;
     }
 
     /**
@@ -564,31 +635,102 @@ public class MainActivity extends Activity {
                 lp.weight = 0;
                 item.setLayoutParams(lp);
             }
-            // MD3 侧边导航栏：贴左边、纵向铺满（surface-container 色阶，与底部导航栏同色）
+            // MD3 侧边导航栏：贴左边、纵向铺满（surface-container 色阶，与底部导航栏同色）；
+            // 从悬浮底栏切过来时还原贴边视觉（无圆角、无投影）
             barLp.topMargin = 0;
             barLp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
             barLp.gravity = android.view.Gravity.START;
+            bar.setBackgroundResource(R.drawable.bg_nav_bar);
+            bar.setElevation(0f);
+            clearBackgroundBlur(bar);
         } else {
-            bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-            // 贴边全宽（MD3 Navigation Bar）：不设最大宽度、无水平/底部留白，铺满内容列宽度
-            barLp.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
-            barLp.height = getResources().getDimensionPixelSize(R.dimen.nav_bar_height);
-            barLp.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL;
-            barLp.setMarginStart(0);
-            barLp.setMarginEnd(0);
+            styleBottomBar();
+        }
+        floatingBar.setLayoutParams(barLp);
+    }
+
+    /** 清除底栏背景模糊（贴边 / 侧边导航栏样式切回时复位；API 31+，不支持时静默跳过） */
+    private void clearBackgroundBlur(View bar) {
+        setBackgroundBlur(bar, 0);
+    }
+
+    /**
+     * 反射调用 View#setBackgroundBlurRadius（API 31+ @hide backdrop blur，部分 ROM 可用）。
+     * 首次调用探测方法存在性并缓存；探测失败 / 调用失败一律静默降级为纯半透明，不拖累主流程。
+     */
+    private static volatile java.lang.reflect.Method sBlurMethod;
+    private static volatile boolean sBlurProbed = false;
+
+    private void setBackgroundBlur(View bar, int radiusPx) {
+        if (Build.VERSION.SDK_INT < 31) return;
+        try {
+            if (!sBlurProbed) {
+                sBlurProbed = true;
+                sBlurMethod = View.class.getMethod("setBackgroundBlurRadius", int.class);
+            }
+            if (sBlurMethod != null) {
+                sBlurMethod.invoke(bar, radiusPx);
+            }
+        } catch (Throwable e) {
+            sBlurMethod = null;
+        }
+    }
+
+    /**
+     * 底部形态视觉（悬浮 / 贴边双样式，config.ini nav_bar_style，悬浮为默认）：
+     * · 悬浮——真正的悬浮 dock：64dp 高的居中胶囊（宽封顶 400dp），左右 20dp / 底部 16dp 留白
+     *   脱离屏幕边缘，85% 半透明磨砂表面（API 31+ backdrop blur）+ 1px 描边 + 12dp elevation
+     *   投影，内容可从 dock 背后穿过（深色主题投影不可见，靠描边与色阶保证边界可辨）
+     * · 贴边——MD3 Navigation Bar 全宽贴底（80dp），无圆角无投影，顶部 1px outline 分割
+     * 两种样式共用同一组导航项（item weight=1 平分），仅容器形态不同；
+     * railMode（大屏横屏侧边导航栏）不经过此方法。
+     */
+    private void styleBottomBar() {
+        var bar = (android.widget.LinearLayout) floatingBar;
+        var barLp = (android.widget.FrameLayout.LayoutParams) floatingBar.getLayoutParams();
+        var density = getResources().getDisplayMetrics().density;
+        bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        barLp.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL;
+        if (navBarFloating) {
+            var maxBar = getResources().getDimensionPixelSize(R.dimen.floating_bar_max_width);
+            var marginH = getResources().getDimensionPixelSize(R.dimen.floating_bar_margin_h);
+            var screenW = getResources().getDisplayMetrics().widthPixels;
+            // 可用宽度必须扣除左右外边距：否则 dock 宽度 + 2×margin 溢出屏幕，右缘被裁
+            barLp.width = Math.max(0, Math.min(maxBar, screenW - marginH * 2));
+            barLp.height = getResources().getDimensionPixelSize(R.dimen.floating_bar_height);
+            barLp.setMarginStart(marginH);
+            barLp.setMarginEnd(marginH);
             barLp.bottomMargin = getResources().getDimensionPixelSize(R.dimen.floating_bar_margin_bottom)
                     + navBottomInset;
+            bar.setBackgroundResource(R.drawable.bg_nav_bar_floating);
+            bar.setElevation(getResources().getDimensionPixelSize(R.dimen.floating_bar_elevation));
+            // 磨砂质感：85% 半透明表面 + 背后内容实时模糊（API 31+ View#setBackgroundBlurRadius
+            // 为 @hide API，反射探测调用；系统不支持时自动跳过，退化为纯半透明玻璃感）
+            setBackgroundBlur(bar, Math.round(20 * density));
+            bar.setPadding(getResources().getDimensionPixelSize(R.dimen.space_6),
+                    getResources().getDimensionPixelSize(R.dimen.space_4),
+                    getResources().getDimensionPixelSize(R.dimen.space_6),
+                    getResources().getDimensionPixelSize(R.dimen.space_4));
+        } else {
+            barLp.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+            barLp.height = getResources().getDimensionPixelSize(R.dimen.nav_bar_height);
+            barLp.setMarginStart(0);
+            barLp.setMarginEnd(0);
+            barLp.bottomMargin = navBottomInset;
+            bar.setBackgroundResource(R.drawable.bg_nav_bar);
+            bar.setElevation(0f);
+            clearBackgroundBlur(bar);
             bar.setPadding(getResources().getDimensionPixelSize(R.dimen.space_8),
                     getResources().getDimensionPixelSize(R.dimen.space_8),
                     getResources().getDimensionPixelSize(R.dimen.space_8),
                     getResources().getDimensionPixelSize(R.dimen.space_6));
-            for (var item : navItems) {
-                var lp = (android.widget.LinearLayout.LayoutParams) item.getLayoutParams();
-                lp.width = 0;
-                lp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
-                lp.weight = 1f;
-                item.setLayoutParams(lp);
-            }
+        }
+        for (var item : navItems) {
+            var lp = (android.widget.LinearLayout.LayoutParams) item.getLayoutParams();
+            lp.width = 0;
+            lp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+            lp.weight = 1f;
+            item.setLayoutParams(lp);
         }
         floatingBar.setLayoutParams(barLp);
     }
@@ -1004,6 +1146,7 @@ public class MainActivity extends Activity {
             var width = tabContainer.getWidth();
             if (width <= 0) width = getResources().getDisplayMetrics().widthPixels;
             layoutTabs(currentIndex, false);
+            applyTabContentBottomPadding();
         });
     }
 
@@ -1084,7 +1227,7 @@ public class MainActivity extends Activity {
     /**
      * 统一返回处理（按键 + 手势）：
      * 优先回退二级页面（云盘流程，逐级返回）；Tab 层不记录路由——
-     * 任意非 0 Tab 返回都直接回到第 0 Tab（设备配置页），0 Tab 再按一次二次确认退出。
+     * 任意非 0 Tab 返回都直接回到第 0 Tab（备份配置页），0 Tab 再按一次二次确认退出。
      */
     private void handleBack() {
         var fm = getFragmentManager();
@@ -1092,14 +1235,14 @@ public class MainActivity extends Activity {
             super.onBackPressed();
             return;
         }
-        // Tab 层：任意 Tab 返回都回到设备配置页（第 0 Tab）
+        // Tab 层：任意 Tab 返回都回到备份配置页（第 0 Tab）
         if (currentIndex != 0) {
             currentIndex = 0;
             updateTabSelection(TAB_NAMES[0]);
             layoutTabs(0, true);
             return;
         }
-        // 已在设备配置页：二次返回确认退出
+        // 已在备份配置页：二次返回确认退出
         var now = System.currentTimeMillis();
         if (now - lastBackPressTime < 2000) {
             super.onBackPressed();

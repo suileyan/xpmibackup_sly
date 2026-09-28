@@ -54,6 +54,8 @@
     <!-- 导航栏与浮层（MD3 深色导航栏 = surface-container） -->
     <color name="nav_bar">#1C1C1C</color>
     <color name="nav_bar_border">#3A3A3A</color>
+    <!-- 悬浮 dock 磨砂表面：85% 半透明（深色提亮一档 + View#setBackgroundBlurRadius 背景模糊） -->
+    <color name="nav_bar_floating_surface">#D92C2C2C</color>
     <color name="scrim">#A6000000</color>
     <color name="ripple">#1FE8E8E8</color>
     <color name="ripple_on_brand">#4DFFFFFF</color>

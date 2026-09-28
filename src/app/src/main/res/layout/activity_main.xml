@@ -86,16 +86,20 @@
             </FrameLayout>
         </LinearLayout>
 
-        <!-- 底部留白：为悬浮底栏让出空间，overlay 二级页面打开时归零 -->
+        <!-- 底部穿透区：高度恒 0——悬浮 dock 下内容直接穿过 dock 背后（遮挡仅 dock 本体），
+             滚动到底的露出由各 Tab 页 ScrollView 底部 padding 预留；overlay 二级页面照常铺满。
+             贴边样式下遮挡范围同样由 Tab 页 padding 承担。保留视图供 Java 统一维护（恒 0） -->
         <View
             android:id="@+id/bottom_spacer"
             android:layout_width="match_parent"
-            android:layout_height="@dimen/floating_bar_clearance" />
+            android:layout_height="0dp" />
     </LinearLayout>
 
-    <!-- ==================== 贴边全宽导航栏层（MD3 Navigation Bar） ==================== -->
-    <!-- 贴屏底全宽：无水平/底部留白、无圆角，surface-container 色阶 + 顶部 1px outline 分割；
-         Android 15+ edge-to-edge 下按导航栏 inset 抬升，避免被手势条遮挡（MainActivity.applyFloatingBarInsets） -->
+    <!-- ==================== 底部导航栏层（悬浮 / 贴边双样式，config.ini nav_bar_style） ==================== -->
+    <!-- 悬浮（默认）：左右/底部留白 + 28dp 圆角 + elevation 投影，脱离屏幕边缘；
+         贴边：MD3 全宽贴底，无圆角无投影，顶部 1px outline 分割。
+         形态由 MainActivity.styleBottomBar() 运行时切换；
+         Android 15+ edge-to-edge 下按导航栏 inset 抬升，避免被手势条遮挡 -->
     <LinearLayout
         android:id="@+id/tab_bar_container"
         style="@style/XmNavBar"

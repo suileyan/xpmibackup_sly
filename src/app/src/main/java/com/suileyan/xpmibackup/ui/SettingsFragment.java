@@ -15,6 +15,7 @@ import com.suileyan.xpmibackup.R;
 /**
  * 设置页
  * - 应用主题：白昼 / 黑夜 / 跟随系统（config.ini theme_mode，UiModeManager 应用）
+ * - 底栏样式：悬浮 / 贴边（config.ini nav_bar_style，MainActivity.onNavBarStyleChanged 即时生效）
  * - 预测性返回开关（config.ini predictive_back，控制 MainActivity 手势返回动画）
  */
 public class SettingsFragment extends Fragment {
@@ -22,6 +23,7 @@ public class SettingsFragment extends Fragment {
     private static final String TAG = "XpMiBackup";
 
     private RadioGroup rgTheme;
+    private RadioGroup rgNavStyle;
     private android.widget.Switch swPredictiveBack;
     private android.widget.Switch swUpdateCheck;
     /** 初始化标志：避免初始化 setChecked 触发监听器导致重复保存 */
@@ -32,6 +34,7 @@ public class SettingsFragment extends Fragment {
         var view = inflater.inflate(R.layout.fragment_settings, container, false);
 
         rgTheme = view.findViewById(R.id.rg_theme);
+        rgNavStyle = view.findViewById(R.id.rg_nav_style);
         swPredictiveBack = view.findViewById(R.id.sw_predictive_back);
         swUpdateCheck = view.findViewById(R.id.sw_update_check);
 
@@ -44,6 +47,9 @@ public class SettingsFragment extends Fragment {
         } else {
             rgTheme.check(R.id.rb_theme_system);
         }
+        // 底栏样式：悬浮（默认）/ 贴边
+        rgNavStyle.check("fixed".equals(ConfigHelp.getString("nav_bar_style", "floating"))
+                ? R.id.rb_nav_fixed : R.id.rb_nav_floating);
         swPredictiveBack.setChecked(!"off".equals(ConfigHelp.getString("predictive_back", "on")));
         swUpdateCheck.setChecked(!"off".equals(ConfigHelp.getString("update_check", "on")));
         initialized = true;
@@ -88,6 +94,23 @@ public class SettingsFragment extends Fragment {
             var decor = activity.getWindow().getDecorView();
             decor.animate().alpha(0f).setDuration(220)
                     .withEndAction(activity::recreate).start();
+        });
+
+        // 底栏样式切换：持久化到 config.ini，并通知 MainActivity 立即重放底栏形态（无需重建）
+        rgNavStyle.setOnCheckedChangeListener((group, checkedId) -> {
+            if (!initialized) return;
+            var style = checkedId == R.id.rb_nav_fixed ? "fixed" : "floating";
+            try {
+                var cfg = ConfigHelp.load();
+                cfg.put("nav_bar_style", style);
+                ConfigHelp.save(cfg);
+            } catch (Exception e) {
+                LogHelp.w(TAG, "save nav bar style failed", e);
+            }
+            var activity = getActivity();
+            if (activity instanceof MainActivity) {
+                ((MainActivity) activity).onNavBarStyleChanged();
+            }
         });
 
         swPredictiveBack.setOnCheckedChangeListener((buttonView, isChecked) -> {

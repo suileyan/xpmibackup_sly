@@ -35,6 +35,10 @@ public class AccountConfigFragment extends Fragment {
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         var t0 = System.currentTimeMillis();
         var view = inflater.inflate(R.layout.fragment_account_config, container, false);
+        // 底部预留：内容穿过悬浮底栏背后（clipToPadding=false），滚到底时最后一项滚出遮挡范围
+        if (getActivity() instanceof com.suileyan.xpmibackup.MainActivity main) {
+            com.suileyan.xpmibackup.MainActivity.applyBottomClearance(view, main.getBottomContentPadding());
+        }
 
         accountList = view.findViewById(R.id.cloud_account_list);
         tvEmpty = view.findViewById(R.id.tv_cloud_empty);

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 悬浮 dock 容器：独立表面色（亮一档）+ 1px outline 描边 + 32dp 全圆角胶囊。
+     描边保证深色主题（投影不可见）下仍有明确边界；浅色主题下描边+12dp elevation 投影共同浮起。
+     与贴边样式（bg_nav_bar：全宽直角 + 顶部 1px 分割线）形成可辨差异 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/nav_bar_floating_surface" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/md3_outline_variant" />
+    <corners android:radius="@dimen/radius_floating_bar" />
+</shape>
