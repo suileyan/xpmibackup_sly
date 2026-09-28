@@ -184,6 +184,25 @@ jobs:
           path: src/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
+      # Release 正文取自 CHANGELOG.md 中当前 tag 对应的版本段。
+      # 原先只靠 generate_release_notes，正文只有自动生成的 commit 列表，用户看不到整理好的更新日志。
+      # 提取失败（CHANGELOG 漏写该版本）时退化为一句指向 CHANGELOG 的说明，不让发布流程失败。
+      - name: Extract release notes from CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            index($0, "## v" ver) == 1 { flag = 1; next }
+            flag && index($0, "## ") == 1 { exit }
+            flag { print }
+          ' CHANGELOG.md > release-notes.md || true
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::CHANGELOG.md 中未找到 v${VERSION} 段，Release 正文退化为仓库链接"
+            echo "本版本变更详见 [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md)。" > release-notes.md
+          fi
+          echo "--- Release 正文预览 ---"
+          cat release-notes.md
+
       - name: Publish to GitHub Releases
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
@@ -193,5 +212,7 @@ jobs:
             pc/dist/mibackpc.exe
           # tag 含 "-"（如 v0.9.0-beta.1）→ pre-release；正式版（vX.Y.Z）→ 普通 Release
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # body_path 的正文会被 API 前置到自动生成的 commit 列表之前
+          body_path: release-notes.md
           generate_release_notes: true
           fail_on_unmatched_files: true
