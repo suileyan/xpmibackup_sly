@@ -100,6 +100,22 @@ jobs:
             echo "::warning::KEYSTORE_BASE64 secret not set - building UNSIGNED release APK"
           fi
 
+      # Google Drive 内置 OAuth 客户端：从 GitHub Secrets 注入（可选）。
+      # 需配置：GDRIVE_CLIENT_ID、GDRIVE_CLIENT_SECRET（GCP「桌面应用」类型 OAuth 客户端的两个值）。
+      # 未配置时注入空串 → 发布版回退为「用户在登录页自填凭据」。
+      # 凭据只落在构建机上，不进入仓库（src/gdrive.properties 已在 .gitignore 中）。
+      - name: Configure Google Drive built-in client
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+        run: |
+          if [ -n "$GDRIVE_CLIENT_ID" ] && [ -n "$GDRIVE_CLIENT_SECRET" ]; then
+            printf 'clientId=%s\nclientSecret=%s\n' "$GDRIVE_CLIENT_ID" "$GDRIVE_CLIENT_SECRET" > src/gdrive.properties
+            echo "::notice::Google Drive built-in OAuth client configured from secrets"
+          else
+            echo "::warning::GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET not set - Google Drive will require users to enter their own OAuth client"
+          fi
+
       # 从 tag 自动同步版本号：
       #   v0.2.1         → versionName "0.2.1"、versionCode 201（主*10000+次*100+补丁）
       #   v0.2.1-beta.1  → versionName "0.2.1-beta.1"、versionCode 201（pre-release 与目标正式版共享 versionCode，

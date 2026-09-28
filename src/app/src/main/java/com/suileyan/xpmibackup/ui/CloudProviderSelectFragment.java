@@ -41,6 +41,11 @@ public class CloudProviderSelectFragment extends Fragment {
                 getString(R.string.cloud_provider_aliyun),
                 getString(R.string.cloud_provider_aliyun_hint),
                 v -> openLogin(WebViewLoginFragment.PROVIDER_ALIYUN)));
+        // Google Drive：loopback 授权（Google 拒绝内嵌 WebView 的 OAuth），走独立登录页
+        list.addView(createProviderRow(R.drawable.ic_tab_cloud,
+                getString(R.string.cloud_provider_gdrive),
+                getString(R.string.cloud_provider_gdrive_hint),
+                v -> openGDriveLogin()));
         // 123 云盘已撤销支持（API 宿主迁移后建目录/上传链路不稳定，对外不可用）：
         // 不再展示登录入口；ProviderRegistry 分发保留，存量 123 账号仍可被识别
         // list.addView(createProviderRow(R.drawable.ic_tab_cloud,
@@ -125,8 +130,7 @@ public class CloudProviderSelectFragment extends Fragment {
      * 打开对应网盘的 WebView 登录页
      * @param provider 网盘类型（WebViewLoginFragment.PROVIDER_*）
      */
-    private void openLogin(String provider) {
-        var login = new WebViewLoginFragment();
+    private void openLogin(String provider) {        var login = new WebViewLoginFragment();
         var args = new Bundle();
         args.putString(WebViewLoginFragment.ARG_PROVIDER, provider);
         login.setArguments(args);
@@ -140,6 +144,24 @@ public class CloudProviderSelectFragment extends Fragment {
         }
         // add 叠放：下层选择页 view 常驻，预测返回跟手时从左侧露出（返回显示上一层）；
         // pop 用 0ms 空动画避免转场闪烁
+        ft.setCustomAnimations(R.animator.slide_in_right, R.animator.no_anim,
+                R.animator.no_anim, R.animator.no_anim);
+        ft.add(R.id.overlay_container, login);
+        ft.addToBackStack("cloud-login");
+        ft.commit();
+    }
+
+    /**
+     * 打开 Google Drive 授权页（loopback 方案，不经 WebView）
+     */
+    private void openGDriveLogin() {
+        var login = new GDriveLoginFragment();
+        var ft = getFragmentManager().beginTransaction();
+        var overlay = getActivity() != null ? getActivity().findViewById(R.id.overlay_container) : null;
+        if (overlay != null) {
+            overlay.setTranslationX(0f);
+            overlay.setVisibility(View.VISIBLE);
+        }
         ft.setCustomAnimations(R.animator.slide_in_right, R.animator.no_anim,
                 R.animator.no_anim, R.animator.no_anim);
         ft.add(R.id.overlay_container, login);

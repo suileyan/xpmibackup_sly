@@ -11,6 +11,21 @@ if (hasReleaseKeystore) {
     keystoreProps.load(new FileInputStream(keystorePropsFile))
 }
 
+// Google Drive 内置 OAuth 客户端：从根目录 gdrive.properties 注入。
+// 该文件已在 .gitignore 中，凭据不会进入 git 历史（参考 keystore.properties 的同款做法）；
+// 未配置时注入空串 → 登录页回退为「要求用户自填自己的 GCP 凭据」。
+// 字段：clientId / clientSecret（GCP 控制台「桌面应用」类型 OAuth 客户端的两个值）
+def gdriveProps = new Properties()
+def gdrivePropsFile = rootProject.file('gdrive.properties')
+def hasGdriveClient = gdrivePropsFile.exists()
+if (hasGdriveClient) {
+    gdrivePropsFile.withInputStream { gdriveProps.load(it) }
+}
+def gdriveClientId = hasGdriveClient ? (gdriveProps['clientId'] ?: '') : ''
+def gdriveClientSecret = hasGdriveClient ? (gdriveProps['clientSecret'] ?: '') : ''
+// 生成 Java 字符串字面量：转义反斜杠与引号，避免凭据里的特殊字符破坏 buildConfigField
+def javaStr = { String s -> '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"' }
+
 android {
     namespace 'com.suileyan.xpmibackup'
     compileSdk 37
@@ -22,8 +37,17 @@ android {
         // Android 9~10 的 legacy 存储权限分支已按 v0.9.1 决策移除（见 docs/ANDROID-VERSION-MATRIX.md）
         minSdk 30
         targetSdk 37
-        versionCode 10000
-        versionName "1.0.0"
+        versionCode 10100
+        versionName "1.1.0"
+
+        // Google Drive 内置 OAuth 客户端（空串 = 未配置，登录页会要求用户自填）
+        buildConfigField "String", "GDRIVE_CLIENT_ID", javaStr(gdriveClientId)
+        buildConfigField "String", "GDRIVE_CLIENT_SECRET", javaStr(gdriveClientSecret)
+    }
+
+    buildFeatures {
+        // 仅为注入 Google Drive 内置 OAuth 凭据（GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET）而开启
+        buildConfig true
     }
 
     // signingConfigs 必须在 buildTypes 之前声明（NEW-H-04）：

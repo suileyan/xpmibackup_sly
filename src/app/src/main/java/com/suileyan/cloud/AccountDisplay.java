@@ -80,6 +80,7 @@ public final class AccountDisplay {
         if (CloudAccount.PROVIDER_WO.equals(provider)) return "联通沃盘";
         if (CloudAccount.PROVIDER_115.equals(provider)) return "115网盘";
         if (CloudAccount.PROVIDER_ALIYUN.equals(provider)) return "阿里云盘";
+        if (CloudAccount.PROVIDER_GDRIVE.equals(provider)) return "Google Drive";
         return provider == null ? "" : provider;
     }
 

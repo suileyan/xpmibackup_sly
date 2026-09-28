@@ -38,6 +38,9 @@ render.experimental.xml
 *.keystore
 keystore.properties
 
+# Google Drive 内置 OAuth 客户端凭据（构建期注入，绝不入库）
+gdrive.properties
+
 # Google Services (e.g. APIs or Firebase)
 google-services.json
 

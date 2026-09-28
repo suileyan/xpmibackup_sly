@@ -1,0 +1,27 @@
+# Google Drive 内置 OAuth 客户端配置（模板）
+#
+# 用法：把本文件复制为同目录下的 gdrive.properties（去掉 .example 后缀）并填入真实值。
+#       gdrive.properties 已在 .gitignore 中，不会进入 git 历史。
+#
+# 取值步骤：
+#   1. 打开 console.cloud.google.com，新建或选择一个项目
+#   2. 「API 和服务 → 库」中搜索并启用 Google Drive API
+#   3. 「API 和服务 → Google Auth Platform → 受众群体」配置同意屏幕：用户类型选「外部」，
+#      并把「发布状态」改为「正式版」——停留在「测试」状态时 Google 下发的 refresh_token
+#      只有 7 天有效期，用户每周都要重新授权一次，对备份工具是致命的。
+#      注意：「正式版」不等于「已通过 Google 验证」，未验证 + 正式版是合法组合，
+#      refresh_token 不过期，代价只是授权时用户会看到「未验证应用」警告页（点「高级 → 继续」）。
+#      （若确实要停留在「测试」状态，则需在「测试用户」中逐个加入要授权的 Google 账号，上限 100 个）
+#   4. 「API 和服务 → 凭据 → 创建凭据 → OAuth 客户端 ID」，
+#      应用类型必须选「桌面应用」——选「Android」会要求填包名与签名指纹，且无法配合本模块的 loopback 授权
+#   5. 把生成的两个值填到下面
+#
+# 未提供本文件时，构建出的 APK 会在 Google Drive 登录页要求用户自填自己的凭据。
+#
+# 安全提示：Google 对「桌面应用」类型的 client_secret 不视为机密（已安装应用无法保密），
+# 但内置并公开分发意味着任何人都能用这个 client_id 发起授权——消耗的是本项目配额，
+# 滥用还可能导致 client 被停用（rclone 的共享 client 已宣布 2026 年退役）。
+# 作者侧请开启 GCP 用量监控；被封时用户仍可在登录页改填自己的凭据自救。
+
+clientId=
+clientSecret=

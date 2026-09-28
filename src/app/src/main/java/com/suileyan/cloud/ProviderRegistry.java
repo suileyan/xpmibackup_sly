@@ -3,6 +3,7 @@ package com.suileyan.cloud;
 import com.suileyan.cloud.provider.AliDriveProvider;
 import com.suileyan.cloud.provider.BaiduProvider;
 import com.suileyan.cloud.provider.GuangyaProvider;
+import com.suileyan.cloud.provider.GoogleDriveProvider;
 import com.suileyan.cloud.provider.Pan115Provider;
 import com.suileyan.cloud.provider.Pan123Provider;
 import com.suileyan.cloud.provider.QuarkProvider;
@@ -84,6 +85,9 @@ public final class ProviderRegistry {
             }
             if (account != null && CloudAccount.PROVIDER_ALIYUN.equals(account.provider)) {
                 return AliDriveProvider.TYPE;
+            }
+            if (account != null && CloudAccount.PROVIDER_GDRIVE.equals(account.provider)) {
+                return GoogleDriveProvider.TYPE;
             }
             // 未知/已删除账号：返回空串，由调用方回退
             return "";
@@ -192,6 +196,9 @@ public final class ProviderRegistry {
         }
         if (CloudAccount.PROVIDER_ALIYUN.equals(account.provider)) {
             return new AliDriveProvider(account);
+        }
+        if (CloudAccount.PROVIDER_GDRIVE.equals(account.provider)) {
+            return new GoogleDriveProvider(account);
         }
         LogHelp.e(TAG, "unsupported cloud provider: " + account.provider);
         return null;

@@ -17,6 +17,9 @@
     <string name="theme_system">跟随系统</string>
     <string name="theme_day">白昼</string>
     <string name="theme_night">黑夜</string>
+    <string name="nav_bar_style">底栏样式</string>
+    <string name="nav_style_floating">悬浮底栏（圆角投影，脱离屏幕边缘）</string>
+    <string name="nav_style_fixed">贴边底栏（全宽贴底）</string>
     <string name="predictive_back">预测性返回</string>
     <string name="predictive_back_hint">全面屏手势返回时显示系统预测动画</string>
     <string name="update_check">版本检测</string>
@@ -31,32 +34,33 @@
     <string name="about_download_apk">下载 APK（123 网盘）</string>
     <string name="update_dialog_title">发现新版本</string>
     <string name="update_dialog_message">新版本 v%1$s 已发布，是否前往下载？</string>
-    <string name="tab_device_config">设备配置</string>
+    <string name="tab_device_config">备份配置</string>
     <string name="tab_service_config">NAS</string>
     <string name="tab_account_config">云盘</string>
     <string name="tab_backup_config">备份</string>
-    <string name="title_device_config">设备配置</string>
+    <string name="title_device_config">备份配置</string>
     <string name="title_service_config">NAS 配置</string>
     <string name="title_account_config">云盘账号</string>
     <string name="title_backup_config">备份</string>
 
-    <string name="device_info_section">设备信息</string>
-    <string name="device_name">设备名称</string>
-    <string name="device_name_hint">例: 远程备份设备</string>
-    <string name="device_description">设备描述</string>
-    <string name="device_description_hint">例: 我的云端备份设备</string>
+    <string name="backup_section_basic">备份参数</string>
+    <string name="backup_section_upload">上传与切片</string>
     <string name="backup_path">备份路径</string>
     <string name="backup_path_description">在云端存储的起始路径</string>
     <string name="backup_path_hint">例: MIUI/backup</string>
     <string name="max_backup_count">最大备份数</string>
     <string name="max_backup_count_description">超出数量时自动清理旧备份，设 0 不清理</string>
+    <string name="upload_threads">上传线程数</string>
+    <string name="desc_upload_threads">单个文件切片后的并行上传分片数（1-64），越大越占带宽</string>
+    <string name="chunk_size_mb">切片大小（MB，0 不切片）</string>
+    <string name="desc_chunk_size">按此大小分片上传，0 表示不分片</string>
+    <string name="item_threads">备份项并发</string>
+    <string name="desc_item_threads">同时上传的备份项个数（1-16）；设为 1 即逐项备份，一项传完再传下一项</string>
     <string name="write_error_log">写入错误日志</string>
     <string name="log_path_hint">/sdcard/MIUI/backup/logs/年月日.log</string>
     <string name="save_config">保存配置</string>
 
     <string name="backup_protocol">备份协议</string>
-    <string name="upload_threads">上传线程数</string>
-    <string name="chunk_size_mb">切片大小（MB，0 不切片）</string>
     <string name="server_address">服务器地址</string>
     <string name="smb_server_hint">例: 192.168.1.100</string>
     <string name="port">端口</string>
@@ -77,8 +81,6 @@
     <string name="service_tab_nas">NAS 配置</string>
     <string name="service_tab_custom">自定义配置</string>
     <string name="desc_profile_name">为当前配置方案命名，可保存多套方案随时切换</string>
-    <string name="desc_upload_threads">并发上传线程数，越大越占带宽</string>
-    <string name="desc_chunk_size">按此大小分片上传，0 表示不分片</string>
     <string name="desc_smb_server">NAS 的 IP 地址或域名</string>
     <string name="desc_smb_port">SMB 服务端口，默认 445</string>
     <string name="desc_share_folder">服务器上设置的共享名（如 public、mivideo），登录后以此目录为根；多共享环境请填你账号可访问的那个，不含路径分隔符</string>
@@ -92,13 +94,15 @@
     <string name="script_below_hint">下方还有脚本配置项与保存按钮，可下滑查看</string>
     <string name="toast_sample_script_loaded">已加载示例脚本，可在此基础上修改</string>
 
-    <string name="toast_device_id_required">请先在设备配置中填写设备ID</string>
+    <string name="toast_device_id_required">设备标识未就绪，请先在备份配置页保存一次配置</string>
     <string name="toast_backup_app_missing">未找到备份APP，请确认已安装小米备份</string>
     <string name="toast_market_app_missing">未找到小米应用商店</string>
     <string name="toast_config_saved">配置已保存</string>
-    <string name="toast_device_name_required">设备名称不能为空</string>
     <string name="toast_backup_path_required">备份路径不能为空</string>
     <string name="toast_backup_max_invalid">最大备份数必须是非负整数</string>
+    <string name="toast_chunk_threads_invalid">上传线程数必须是 1-64 的整数</string>
+    <string name="toast_chunk_size_invalid">切片大小必须是 0-1024 的整数（0 表示不切片）</string>
+    <string name="toast_item_threads_invalid">备份项并发必须是 1-16 的整数</string>
     <string name="toast_connection_success">连接成功，配置已保存</string>
     <string name="toast_connection_failed">配置已保存，但连接失败，请检查参数</string>
 
@@ -184,6 +188,32 @@
     <string name="cloud_provider_quark_hint">应用内网页登录</string>
     <string name="cloud_provider_aliyun">阿里云盘</string>
     <string name="cloud_provider_aliyun_hint">应用内网页登录</string>
+    <string name="cloud_provider_gdrive">Google Drive</string>
+    <string name="cloud_provider_gdrive_hint">系统浏览器授权（需可访问 Google）</string>
+
+    <!-- Google Drive loopback 授权页 -->
+    <string name="gdrive_login_title">Google Drive 授权</string>
+    <string name="gdrive_step_fill">第 1 步：填写 Google Cloud OAuth 客户端信息（应用类型必须为「桌面应用」）</string>
+    <string name="gdrive_builtin_ready">已内置 OAuth 客户端，直接点下方「开始授权」，在系统浏览器完成 Google 登录即可（需可访问 Google）</string>
+    <string name="gdrive_use_own_client">使用自己的 OAuth 客户端</string>
+    <string name="gdrive_help_link">如何获取 Client ID / Secret？</string>
+    <string name="gdrive_help_steps">1. 打开 console.cloud.google.com，新建或选择一个项目\n2. 在「API 和服务 → 库」中搜索并启用 Google Drive API\n3. 在「API 和服务 → Google Auth Platform → 受众群体」配置同意屏幕：用户类型选「外部」，并把「发布状态」改为「正式版」——停留在「测试」状态时 Google 下发的 refresh_token 只有 7 天有效期，用户每周都要重新授权；「正式版」不等于「已通过验证」，未验证 + 正式版是合法组合，只是授权时会看到「未验证应用」警告页（点「高级 → 继续」即可）。若确实要停留在「测试」状态，需在「测试用户」中逐个加入要授权的 Google 账号（上限 100 个）。\n4. 在「API 和服务 → 凭据 → 创建凭据 → OAuth 客户端 ID」创建凭据，应用类型必须选「桌面应用」\n5. 把生成的 Client ID 与客户端密钥填入上方两个输入框\n\n注意 1：若看到要求填「包名」和「签名证书指纹」，说明应用类型选成了「Android」。Android 类型只能配合 Google Play 服务授权，与本模块不兼容；请改选「桌面应用」——它只需要填一个名称，不用填包名，也不用填重定向 URI（Google 会自动放行 127.0.0.1 回环地址的任意端口）。\n\n注意 2：应用处于「测试」状态时，只有同意屏幕中登记的测试用户才能完成授权。若上方两栏为空，说明本次构建未内置 OAuth 客户端，这两项为必填。\n\n注意 3：「应用域名」中的申请主页 / 隐私政策 / 服务条款都可以留空；一旦填了某个网址，就必须把它的纯域名（如 github.com，不带 https:// 与路径）加进「授权域名」才能保存。这些栏位只在提交 Google 验证时才真正必需。</string>
+    <string name="gdrive_step_auth">第 2 步：点击「开始授权」，在系统浏览器中完成 Google 登录并允许访问</string>
+    <string name="gdrive_client_id_hint">Client ID</string>
+    <string name="gdrive_client_secret_hint">Client Secret</string>
+    <string name="gdrive_proxy_section">代理（可选：当前网络无法直连 Google 时填写）</string>
+    <string name="gdrive_proxy_host_hint">代理地址（如 127.0.0.1）</string>
+    <string name="gdrive_proxy_port_hint">代理端口（如 7890）</string>
+    <string name="gdrive_proxy_incomplete">代理地址与端口需同时填写</string>
+    <string name="gdrive_start_auth">开始授权</string>
+    <string name="gdrive_auth_preparing">正在准备授权…</string>
+    <string name="gdrive_auth_waiting">等待浏览器授权回调…（10 分钟内完成，完成后请返回应用）</string>
+    <string name="gdrive_authorizing">正在换取凭据…</string>
+    <string name="gdrive_auth_ok">授权成功</string>
+    <string name="gdrive_auth_failed">授权失败</string>
+    <string name="gdrive_auth_timeout">授权超时，请重试</string>
+    <string name="gdrive_need_client">请先填写 Client ID 与 Client Secret</string>
+    <string name="gdrive_no_browser">未找到浏览器，请安装浏览器后重试</string>
     <string name="cloud_provider_123">123云盘</string>
     <string name="cloud_provider_123_hint">应用内网页登录</string>
     <string name="title_webview_login_123">登录 123 云盘</string>
@@ -236,8 +266,6 @@
     <string name="root_modules_backup">同时备份 Root 模块（Magisk/KernelSU/APatch，需授予 Root）</string>
     <string name="auto_delete_local">上传完成后自动删除本地备份文件</string>
     <string name="auto_delete_local_hint">节省剩余空间，避免小存储机型备份失败</string>
-    <string name="serial_upload" formatted="false">逐项备份（一项 100% 后再备份下一项）</string>
-    <string name="serial_upload_hint">默认多项并行，进度会「各 30% 一起补全」</string>
     <string name="root_modules_packing">正在打包 Root 模块…</string>
     <string name="root_modules_pack_fail">Root 模块打包失败，本次备份将不含模块：</string>
     <string name="root_modules_title">Root 模块</string>

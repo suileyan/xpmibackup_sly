@@ -17,6 +17,9 @@
     <string name="theme_system">Follow system</string>
     <string name="theme_day">Day</string>
     <string name="theme_night">Night</string>
+    <string name="nav_bar_style">Bottom bar style</string>
+    <string name="nav_style_floating">Floating bar (rounded, elevated)</string>
+    <string name="nav_style_fixed">Edge-to-edge bar (full width)</string>
     <string name="predictive_back">Predictive back</string>
     <string name="predictive_back_hint">Show system predictive animation on gesture back</string>
     <string name="update_check">Update check</string>
@@ -31,11 +34,11 @@
     <string name="about_download_apk">Download APK (123)</string>
     <string name="update_dialog_title">Update Available</string>
     <string name="update_dialog_message">Version v%1$s is available. Download now?</string>
-    <string name="tab_device_config">Device</string>
+    <string name="tab_device_config">Backup config</string>
     <string name="tab_service_config">NAS</string>
     <string name="tab_account_config">Cloud</string>
     <string name="tab_backup_config">Backup</string>
-    <string name="title_device_config">Device settings</string>
+    <string name="title_device_config">Backup config</string>
     <string name="title_service_config">NAS settings</string>
     <string name="title_account_config">Cloud accounts</string>
     <string name="title_backup_config">Backup</string>
@@ -124,6 +127,30 @@
     <string name="cloud_provider_quark_hint">In-app web login</string>
     <string name="cloud_provider_aliyun">Aliyun Drive (Alipan)</string>
     <string name="cloud_provider_aliyun_hint">In-app web login</string>
+    <string name="cloud_provider_gdrive">Google Drive</string>
+    <string name="cloud_provider_gdrive_hint">System browser authorization (Google access required)</string>
+    <string name="gdrive_login_title">Google Drive Authorization</string>
+    <string name="gdrive_step_fill">Step 1: Enter your Google Cloud OAuth client info (application type must be \"Desktop app\")</string>
+    <string name="gdrive_builtin_ready">A built-in OAuth client is configured. Just tap \"Start authorization\" below and finish Google sign-in in the system browser (Google access required).</string>
+    <string name="gdrive_use_own_client">Use my own OAuth client</string>
+    <string name="gdrive_help_link">How do I get a Client ID / Secret?</string>
+    <string name="gdrive_help_steps">1. Open console.cloud.google.com and create or select a project\n2. Under \"APIs &amp; Services &gt; Library\", search for and enable the Google Drive API\n3. Under \"APIs &amp; Services &gt; Google Auth Platform &gt; Audience\", configure the consent screen: user type \"External\", and set Publishing status to \"In production\" — while it stays in \"Testing\", Google issues refresh tokens valid for only 7 days, forcing users to re-authorize every week. \"In production\" does not mean \"verified\": unverified + In production is a valid combination; users just see a \"Google hasn\'t verified this app\" warning (tap Advanced &gt; continue). If you do stay in \"Testing\", add each Google account under \"Test users\" (max 100).\n4. Under \"APIs &amp; Services &gt; Credentials &gt; Create credentials &gt; OAuth client ID\", create a credential — the application type must be \"Desktop app\"\n5. Paste the generated Client ID and client secret into the two fields above\n\nNote 1: If you are being asked for a package name and signing certificate fingerprint, the application type was set to \"Android\". Android-type clients only work with Google Play services sign-in and are incompatible with this module; choose \"Desktop app\" instead — it only asks for a name, needs no package name and no redirect URI (Google automatically allows any port on the 127.0.0.1 loopback address).\n\nNote 2: while the app is in \"Testing\" status, only test users registered on the consent screen can authorize. If the fields above were empty, this build has no built-in OAuth client and both are required.\n\nNote 3: Under \"App domain\", the home page / privacy policy / terms of service fields can all be left empty; once you fill in a URL, its bare domain (e.g. github.com, without https:// or a path) must be added to \"Authorized domains\" before you can save. These fields only become required if you submit for Google verification.</string>
+    <string name="gdrive_step_auth">Step 2: Tap \"Start\" and finish Google sign-in in the system browser.</string>
+    <string name="gdrive_client_id_hint">Client ID</string>
+    <string name="gdrive_client_secret_hint">Client Secret</string>
+    <string name="gdrive_proxy_section">Proxy (optional: required when Google is unreachable directly)</string>
+    <string name="gdrive_proxy_host_hint">Proxy host (e.g. 127.0.0.1)</string>
+    <string name="gdrive_proxy_port_hint">Proxy port (e.g. 7890)</string>
+    <string name="gdrive_proxy_incomplete">Proxy host and port must be filled together</string>
+    <string name="gdrive_start_auth">Start authorization</string>
+    <string name="gdrive_auth_preparing">Preparing authorization…</string>
+    <string name="gdrive_auth_waiting">Waiting for browser callback… (finish within 10 minutes, then return to the app)</string>
+    <string name="gdrive_authorizing">Exchanging credentials…</string>
+    <string name="gdrive_auth_ok">Authorization successful</string>
+    <string name="gdrive_auth_failed">Authorization failed</string>
+    <string name="gdrive_auth_timeout">Authorization timed out, please retry</string>
+    <string name="gdrive_need_client">Please fill in Client ID and Client Secret first</string>
+    <string name="gdrive_no_browser">No browser found, please install one and retry</string>
     <string name="title_webview_login_aliyun">Log in to Aliyun Drive</string>
     <string name="cloud_provider_123">123 Cloud Drive</string>
     <string name="cloud_provider_123_hint">In-app web login</string>
@@ -148,23 +175,24 @@
     <string name="webview_login_tip">Log in on the page, then tap "Done" in the top-right corner.</string>
     <string name="toast_webview_no_auth">No login info detected. Please finish login and try again.</string>
 
-    <string name="device_info_section">Device</string>
-    <string name="device_name">Device name</string>
-    <string name="device_name_hint">Example: Remote backup device</string>
-    <string name="device_description">Device description</string>
-    <string name="device_description_hint">Example: My cloud backup device</string>
+    <string name="backup_section_basic">Backup</string>
+    <string name="backup_section_upload">Upload &amp; chunking</string>
     <string name="backup_path">Backup path</string>
     <string name="backup_path_description">Root path used in cloud storage</string>
     <string name="backup_path_hint">Example: MIUI/backup</string>
     <string name="max_backup_count">Maximum backups</string>
     <string name="max_backup_count_description">Automatically delete older backups when exceeded. Use 0 to keep all.</string>
+    <string name="upload_threads">Upload threads</string>
+    <string name="desc_upload_threads">Parallel chunk uploads per file (1-64); higher values use more bandwidth</string>
+    <string name="chunk_size_mb">Chunk size (MB, 0 disables chunking)</string>
+    <string name="desc_chunk_size">Split uploads into chunks of this size; 0 disables chunking</string>
+    <string name="item_threads">Concurrent backup items</string>
+    <string name="desc_item_threads">How many backup items upload at once (1-16); set 1 to finish one item before starting the next</string>
     <string name="write_error_log">Write error logs</string>
     <string name="log_path_hint">/sdcard/MIUI/backup/logs/yyyyMMdd.log</string>
     <string name="save_config">Save configuration</string>
 
     <string name="backup_protocol">Backup protocol</string>
-    <string name="upload_threads">Upload threads</string>
-    <string name="chunk_size_mb">Chunk size (MB, 0 disables chunking)</string>
     <string name="server_address">Server address</string>
     <string name="smb_server_hint">Example: 192.168.1.100</string>
     <string name="port">Port</string>
@@ -185,8 +213,6 @@
     <string name="service_tab_nas">NAS Config</string>
     <string name="service_tab_custom">Custom Config</string>
     <string name="desc_profile_name">Name this profile to save multiple presets and switch between them</string>
-    <string name="desc_upload_threads">Concurrent upload threads; higher values use more bandwidth</string>
-    <string name="desc_chunk_size">Split uploads into chunks of this size; 0 disables chunking</string>
     <string name="desc_smb_server">IP address or hostname of the NAS</string>
     <string name="desc_smb_port">SMB port, default 445</string>
     <string name="desc_share_folder">Share name set on the server (e.g. public, mivideo); it becomes the root after login. In multi-share setups use the one your account can access, without path separators</string>
@@ -200,13 +226,15 @@
     <string name="script_vars_hint" formatted="false">Placeholders like %*NAME*% in the script generate fields below; values are substituted at runtime after saving</string>
     <string name="script_below_hint">Script variables and the save button are below; scroll down to see them</string>
 
-    <string name="toast_device_id_required">Please enter a device ID in Device settings first.</string>
+    <string name="toast_device_id_required">Device identity not ready. Please save the Backup config page once.</string>
     <string name="toast_backup_app_missing">Backup app not found. Please make sure Xiaomi Backup is installed.</string>
     <string name="toast_market_app_missing">Xiaomi App Store not found.</string>
     <string name="toast_config_saved">Configuration saved.</string>
-    <string name="toast_device_name_required">Device name is required.</string>
     <string name="toast_backup_path_required">Backup path is required.</string>
     <string name="toast_backup_max_invalid">Max backup count must be a non-negative integer.</string>
+    <string name="toast_chunk_threads_invalid">Upload threads must be an integer from 1 to 64.</string>
+    <string name="toast_chunk_size_invalid">Chunk size must be an integer from 0 to 1024 (0 disables chunking).</string>
+    <string name="toast_item_threads_invalid">Concurrent backup items must be an integer from 1 to 16.</string>
     <string name="toast_connection_success">Connection succeeded. Configuration saved.</string>
     <string name="toast_connection_failed">Configuration saved, but the connection failed. Please check the settings.</string>
     <string name="relogin_account">Re-login</string>
@@ -236,8 +264,6 @@
     <string name="root_modules_backup">Also back up Root modules (Magisk/KernelSU/APatch, root required)</string>
     <string name="auto_delete_local">Auto-delete local backup file after upload</string>
     <string name="auto_delete_local_hint">Frees storage so small devices can complete backups</string>
-    <string name="serial_upload" formatted="false">Back up one item at a time (100% before next)</string>
-    <string name="serial_upload_hint">Default is parallel: several items advance at ~30% together</string>
     <string name="root_modules_packing">Packing Root modules...</string>
     <string name="root_modules_pack_fail">Failed to pack Root modules, this backup will not include them:</string>
     <string name="root_modules_title">Root modules</string>

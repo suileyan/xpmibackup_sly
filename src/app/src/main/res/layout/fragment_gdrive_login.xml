@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Google Drive 授权登录页（overlay 二级页面）：
+     OAuth client 信息 + 可选代理 + loopback 授权按钮 + 状态提示 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/background">
+
+    <!-- 标题行 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/top_bar_height"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="@dimen/space_20"
+        android:paddingEnd="@dimen/space_8">
+
+        <TextView
+            android:id="@+id/tv_gdrive_title"
+            style="@style/XmTextSection"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:text="@string/gdrive_login_title" />
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="@dimen/page_padding_h"
+            android:paddingEnd="@dimen/page_padding_h"
+            android:paddingTop="@dimen/space_12"
+            android:paddingBottom="@dimen/space_16">
+
+            <!-- 内置 OAuth 客户端已配置时显示：一键授权说明 + 改用自有凭据的入口 -->
+            <TextView
+                android:id="@+id/tv_gdrive_builtin_note"
+                style="@style/XmTextCaption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/gdrive_builtin_ready"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tv_gdrive_use_own"
+                style="@style/XmTextCaption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_8"
+                android:clickable="true"
+                android:focusable="true"
+                android:text="@string/gdrive_use_own_client"
+                android:textColor="@color/brand"
+                android:visibility="gone" />
+
+            <!-- 自有 OAuth 客户端输入区：未内置时直接展开；已内置时默认折叠，由上方链接展开 -->
+            <LinearLayout
+                android:id="@+id/container_gdrive_client"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/XmTextCaption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/gdrive_step_fill" />
+
+                <TextView
+                    android:id="@+id/tv_gdrive_help_link"
+                    style="@style/XmTextCaption"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_8"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:text="@string/gdrive_help_link"
+                    android:textColor="@color/brand" />
+
+                <TextView
+                    android:id="@+id/tv_gdrive_help"
+                    style="@style/XmTextCaption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_8"
+                    android:lineSpacingExtra="@dimen/space_4"
+                    android:text="@string/gdrive_help_steps"
+                    android:visibility="gone" />
+
+                <EditText
+                    android:id="@+id/et_gdrive_client_id"
+                    style="@style/XmInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_12"
+                    android:layout_marginBottom="@dimen/field_gap"
+                    android:hint="@string/gdrive_client_id_hint"
+                    android:imeOptions="actionNext"
+                    android:inputType="text"
+                    android:maxLines="1" />
+
+                <EditText
+                    android:id="@+id/et_gdrive_client_secret"
+                    style="@style/XmInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/field_gap"
+                    android:hint="@string/gdrive_client_secret_hint"
+                    android:imeOptions="actionNext"
+                    android:inputType="textPassword"
+                    android:maxLines="1" />
+            </LinearLayout>
+
+            <TextView
+                style="@style/XmTextCaption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_12"
+                android:text="@string/gdrive_proxy_section" />
+
+            <EditText
+                android:id="@+id/et_gdrive_proxy_host"
+                style="@style/XmInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_12"
+                android:layout_marginBottom="@dimen/field_gap"
+                android:hint="@string/gdrive_proxy_host_hint"
+                android:imeOptions="actionNext"
+                android:inputType="text"
+                android:maxLines="1" />
+
+            <EditText
+                android:id="@+id/et_gdrive_proxy_port"
+                style="@style/XmInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/field_gap"
+                android:hint="@string/gdrive_proxy_port_hint"
+                android:imeOptions="actionDone"
+                android:inputType="number"
+                android:maxLines="1" />
+
+            <Button
+                android:id="@+id/btn_gdrive_start"
+                style="@style/XmButtonPrimary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_12"
+                android:text="@string/gdrive_start_auth" />
+
+            <TextView
+                android:id="@+id/tv_gdrive_status"
+                style="@style/XmTextCaption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_12"
+                android:text="@string/gdrive_step_auth" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>
